@@ -208,6 +208,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.notice("info", "pasted %d bytes — press A to import it", len(msg.Runes))
 		return m, nil
 	}
+	if m.busy != "" {
+		if msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+		return m, nil
+	}
 
 	switch msg.String() {
 	case "ctrl+c":
@@ -319,6 +325,10 @@ func (m *Model) updateDialog(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.dialog = nil
 			m.confirm = nil
 			if payload.Confirmed && target != nil {
+				if target.Kind == pages.ActionSetTrafficMode {
+					m.busy = "changing traffic mode"
+					return m, m.cmdSetTrafficMode(target.Mode)
+				}
 				return m, m.dispatch(*target)
 			}
 			if !payload.Confirmed {
@@ -381,22 +391,17 @@ func (m *Model) dispatch(action pages.Action) tea.Cmd {
 	case pages.ActionSelectProxy:
 		return m.cmdSelectProxy(action.Core, action.Group, action.Proxy)
 	case pages.ActionSetTrafficMode:
-		m.busy = "changing traffic mode"
-		return m.cmdSetTrafficMode(action.Mode)
+		return m.requestTrafficMode(action.Mode)
 	case pages.ActionToggleSystemProxy:
 		if m.network.Desktop.Enabled {
-			m.busy = "restoring desktop proxy"
-			return m.cmdSetTrafficMode(network.ModeOff)
+			return m.requestTrafficMode(network.ModeOff)
 		}
-		m.busy = "enabling desktop proxy"
-		return m.cmdSetTrafficMode(network.ModeSystemProxy)
+		return m.requestTrafficMode(network.ModeSystemProxy)
 	case pages.ActionToggleTUN:
 		if m.tun.Enabled {
-			m.busy = "disabling TUN"
-			return m.cmdSetTrafficMode(network.ModeOff)
+			return m.requestTrafficMode(network.ModeOff)
 		}
-		m.busy = "enabling TUN"
-		return m.cmdSetTrafficMode(network.ModeTUN)
+		return m.requestTrafficMode(network.ModeTUN)
 	case pages.ActionCycleTunStack:
 		m.settings.TunStack = nextTunStack(m.settings.TunStack)
 		m.rebuildData()
@@ -635,7 +640,15 @@ func (m *Model) runCommand(line string) tea.Cmd {
 	case "network":
 		return m.cmdNetworkInfo()
 	case "tun":
-		m.notice("warn", "%s", network.ErrTUNUnsupported.Error())
+		if len(args) > 0 {
+			switch strings.ToLower(args[0]) {
+			case "enable", "on":
+				return m.dispatch(pages.Action{Kind: pages.ActionSetTrafficMode, Mode: network.ModeTUN})
+			case "disable", "off":
+				return m.dispatch(pages.Action{Kind: pages.ActionSetTrafficMode, Mode: network.ModeOff})
+			}
+		}
+		m.notice("warn", "usage: /tun enable|disable")
 	default:
 		m.notice("warn", "unknown command /%s — press ? for help", name)
 	}
@@ -846,15 +859,62 @@ func (m *Model) cmdTestProxies(kind model.CoreKind) tea.Cmd {
 	}
 }
 
+// requestTrafficMode stages a traffic-mode change behind an explicit
+// confirmation. No network operation runs until the dialog is accepted, and a
+// second request is ignored while the previous one is in flight.
+func (m *Model) effectiveTrafficMode() network.Mode {
+	if m.tun.Enabled {
+		return network.ModeTUN
+	}
+	if m.network.Desktop.Enabled {
+		return network.ModeSystemProxy
+	}
+	return network.Mode(m.settings.TrafficMode)
+}
+
+func (m *Model) requestTrafficMode(mode network.Mode) tea.Cmd {
+	if m.busy != "" || m.dialog != nil {
+		return nil
+	}
+	from := m.effectiveTrafficMode()
+	if from == mode && mode != network.ModeTUN {
+		m.notice("info", "traffic mode is already %s", mode.Display())
+		return nil
+	}
+	m.confirm = &pages.Action{Kind: pages.ActionSetTrafficMode, Mode: mode}
+	m.dialog = dialogs.NewConfirm(m.trafficConfirmMessage(from, mode))
+	return nil
+}
+
+func (m *Model) trafficConfirmMessage(from, to network.Mode) string {
+	lines := []string{fmt.Sprintf("Change traffic mode: %s → %s?", from.Display(), to.Display())}
+	switch to {
+	case network.ModeTUN:
+		lines = append(lines, "TUN will take over the default route and DNS until it is disabled.")
+		if m.tun.Enabled {
+			lines = append(lines, "A TUN session is already active and will be restarted.")
+		}
+	case network.ModeSystemProxy:
+		lines = append(lines, fmt.Sprintf("System proxy target: %s. It is enabled only after the core process and this port are verified.", m.app.OwnProxyAddress()))
+		if m.tun.Enabled {
+			lines = append(lines, "The active TUN session will be released first (modes are mutually exclusive).")
+		}
+	case network.ModeOff, network.ModeManual:
+		lines = append(lines, "TUN and the system proxy will be released and the original settings restored.")
+	}
+	return strings.Join(lines, " ")
+}
+
 func (m *Model) cmdSetTrafficMode(mode network.Mode) tea.Cmd {
 	application := m.app
 	settings := app.TunSettingsFrom(m.settings)
 	kind := m.core
+	from := m.effectiveTrafficMode()
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		result, err := application.ApplyTrafficMode(ctx, mode, kind, settings)
-		label := "traffic mode: " + mode.Display()
+		label := "traffic mode: " + from.Display() + " → " + mode.Display()
 		if err != nil {
 			msg := actionResultMsg{label: label, err: err, warnings: result.Warnings}
 			if mode == network.ModeTUN && result.TUN.Report.Level != "" {

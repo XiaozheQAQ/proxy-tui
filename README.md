@@ -209,6 +209,11 @@ Safety rules enforced by preflight:
   configuration (no listener) is called out.
 * "Activation ready" covers live core state, profiles, versions, privileges, egress and the
   TUN/system-proxy conflict checks above.
+* Every traffic-mode change in the TUI asks for confirmation. While the confirmation is
+  open or an action is running, other shortcuts are ignored, so a repeated key cannot start
+  a second network transition.
+* Enabling the desktop system proxy first verifies that the core is running **and** that the
+  configured local proxy port accepts TCP; otherwise it refuses before touching WinINet.
 
 ## Security notes
 

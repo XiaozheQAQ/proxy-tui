@@ -161,6 +161,18 @@ Evidence from the live host: `xray_tun` (IPv4 default route) → BLOCKED, WinINe
 `127.0.0.1:10808` → WARNING, `v2rayN/xray` → WARNING, `preflight completed=true`,
 `activation ready=no`.
 
+### 3C.6 TUI crash and disable acceptance
+
+Real interactive testing covered TUI-started TUN, killing only the TUI PID, keeping the
+core/TUN/route/DNS/traffic alive, restarting the TUI and adopting the same core, and CLI
+Disable. Mihomo and sing-box both passed the crash/adoption part.
+
+Safety hardening added after the automated run: confirmation dialog for every traffic-mode
+change, system-proxy listener verification before WinINet is touched, busy/modal guards
+against repeated shortcuts, and tests for row selection, cancel/confirm, focus retention,
+small terminals and dialog key isolation. The TUI Disable step itself still requires the
+manual procedure in `docs/PHASE3C6_MANUAL_ACCEPTANCE.md`; until then Phase 3C.6 is PARTIAL.
+
 ### Windows adapter classification
 
 Windows adapters are classified from PnP and driver identity, not from the friendly name:

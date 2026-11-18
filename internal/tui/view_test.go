@@ -190,11 +190,18 @@ func TestTrafficModeRowDispatchesAction(t *testing.T) {
 		ui.Update(tea.KeyMsg{Type: tea.KeyDown})
 	}
 	_, cmd := ui.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("expected a traffic mode command, got nil (refusing to run it in tests)")
+	if cmd != nil {
+		t.Fatal("Enter must not start a network operation before confirmation")
 	}
-	// The command is intentionally not executed: it would change the real
-	// desktop proxy configuration of the machine running the tests.
+	if ui.dialog == nil || ui.confirm == nil {
+		t.Fatal("expected a confirmation dialog")
+	}
+	if ui.confirm.Kind != pages.ActionSetTrafficMode || ui.confirm.Mode != network.ModeSystemProxy {
+		t.Fatalf("confirm = %+v", ui.confirm)
+	}
+	if ui.settings.TrafficMode != string(network.ModeOff) {
+		t.Fatalf("traffic mode changed before confirmation: %q", ui.settings.TrafficMode)
+	}
 }
 
 func TestProxyPickerRenders(t *testing.T) {

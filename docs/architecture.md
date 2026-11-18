@@ -70,6 +70,17 @@ configs/templates             embedded base configs for node-only subscriptions
    can adopt the running core: status, proxies, traffic and stop all keep working.
 6. The TUI polls traffic and connections once per second through the Clash API.
 
+## Data flow: TUI traffic-mode change
+
+1. A page action (Settings row, header toggle, or `/tun` / `/system-proxy` command) is routed
+   through `requestTrafficMode`.
+2. The TUI stages a confirmation dialog and performs **no** network call yet. Cancel clears
+   the pending action.
+3. On confirm, `ApplyTrafficMode` enforces the TUN/system-proxy exclusivity, verifies the
+   system-proxy target port is listening, and only then changes the network.
+4. The result notice shows the previous mode → new mode and the interface/address; the TUI
+   ignores further shortcuts while the action is in flight.
+
 ## Data flow: core-native TUN
 
 1. The user enables TUN (TUI Settings, `proxy network tun enable` or `network mode tun`).

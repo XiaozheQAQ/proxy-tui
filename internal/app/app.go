@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"time"
@@ -223,6 +224,10 @@ func (a *App) ApplyTrafficMode(ctx context.Context, mode network.Mode, kind mode
 		if !running {
 			return result, fmt.Errorf("no proxy core is running: start Mihomo or sing-box before enabling the system proxy")
 		}
+		target := a.OwnProxyAddress()
+		if dialErr := proxyListening(target, 700*time.Millisecond); dialErr != nil {
+			return result, fmt.Errorf("system proxy target %s is not listening (%v); start the core or fix its mixed-port before enabling the system proxy", target, dialErr)
+		}
 		networkResult, err := a.Network.SetMode(ctx, mode, a.desiredProxy())
 		result.Network = networkResult
 		return result, err
@@ -244,6 +249,16 @@ func (a *App) ApplyTrafficMode(ctx context.Context, mode network.Mode, kind mode
 	default:
 		return result, fmt.Errorf("unknown traffic mode %q", mode)
 	}
+}
+
+// proxyListening verifies that the local proxy endpoint accepts TCP before the
+// desktop proxy is pointed at it.
+func proxyListening(addr string, timeout time.Duration) error {
+	conn, err := net.DialTimeout("tcp", addr, timeout)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
 }
 
 func (a *App) desiredProxy() network.Desired {

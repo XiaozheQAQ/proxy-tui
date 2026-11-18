@@ -85,3 +85,21 @@
 Core/TUN survival across TUI crash and cross-process adoption: **PASS** for both cores.
 TUI-driven Disable remains **NOT TESTED**; therefore the Phase 3C.6 acceptance is
 **PARTIAL**, and Phase 3D should not start until an interactive Disable test is completed.
+## Safety hardening after the automated run
+
+The automated keystroke run exposed two usability hazards, fixed in this round:
+
+- Traffic-mode changes now require an explicit CONFIRM dialog. The message shows the
+  effective previous mode and the target, and mentions mutual exclusion and the system-proxy
+  target. Cancel or ESC performs no network action.
+- The TUI refuses to enable the system proxy unless the core process is running **and**
+  `127.0.0.1:<mixed-port>` accepts a TCP connection; otherwise the operation fails before
+  touching WinINet.
+- While an action is in flight the TUI ignores further shortcuts, and modal dialogs swallow
+  global page/number keys, preventing duplicate mode switches.
+- The command palette `/tun` and `/system-proxy` go through the same confirmation.
+- Unit tests cover row selection, Enter dispatch, system-proxy non-triggering, cancel/confirm,
+  page-switch focus, small terminals, busy-key suppression and dialog modal behaviour.
+
+TUI Disable remains **NOT TESTED** until the manual acceptance above is completed;
+Phase 3C.6 stays **PARTIAL**.
