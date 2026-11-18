@@ -1,0 +1,14 @@
+# Binaries
+/proxy
+/proxy.exe
+/dist/
+/build/
+
+# Local runtime data
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Test fixtures generated at runtime
+/testdata/tmp/
