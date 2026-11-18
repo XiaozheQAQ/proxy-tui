@@ -29,7 +29,7 @@ func platformFacts(_ context.Context, facts *Facts) {
 	facts.DesktopProxyKnown, facts.DesktopProxyEnabled, facts.DesktopProxyAddress = windowsDesktopProxy()
 	facts.WinHTTPKnown, facts.WinHTTPEnabled, facts.WinHTTPDetail = windowsWinHTTP()
 	facts.ExternalAgents = append(facts.ExternalAgents, windowsExternalAgents()...)
-	windowsInterfaceMetadata(facts)
+	inspectWindowsAdapters(facts)
 
 	facts.NftKnown = false
 	facts.FirewallKnown = true
@@ -99,123 +99,6 @@ func windowsExternalAgents() []ExternalAgent {
 	return agents
 }
 
-// windowsInterfaceMetadata attributes virtual adapters to TUN, VPN or unknown.
-func windowsInterfaceMetadata(facts *Facts) {
-	root, err := registry.OpenKey(registry.LOCAL_MACHINE, windowsNetworkClassKey,
-		registry.QUERY_VALUE|registry.ENUMERATE_SUB_KEYS)
-	if err != nil {
-		return
-	}
-	defer func() { _ = root.Close() }()
-	guids, err := root.ReadSubKeyNames(-1)
-	if err != nil {
-		return
-	}
-	descriptions := windowsAdapterDescriptions()
-	for _, guid := range guids {
-		conn, err := registry.OpenKey(root, guid+`\Connection`, registry.QUERY_VALUE)
-		if err != nil {
-			continue
-		}
-		name, _, nameErr := conn.GetStringValue("Name")
-		pnp, _, _ := conn.GetStringValue("PnpInstanceID")
-		_ = conn.Close()
-		if nameErr != nil || name == "" {
-			continue
-		}
-		if !interfaceIsUp(facts, name) {
-			continue
-		}
-		lowerPNP := lowerASCII(pnp)
-		description := lowerASCII(descriptions[guid])
-		virtual := looksVirtual(lowerPNP) || strings.Contains(description, "virtual") ||
-			strings.Contains(description, "tunnel")
-		knownInfra := isInfrastructureVirtual(name) || strings.Contains(description, "virtualbox") ||
-			strings.Contains(description, "vmware") || strings.Contains(description, "hyper-v") ||
-			strings.Contains(description, "kernel debug")
-		switch {
-		case IsTUNName(name), strings.Contains(lowerPNP, "wintun"), strings.Contains(lowerPNP, "tap"),
-			strings.Contains(description, "wintun"), strings.Contains(description, "tunnel"):
-			facts.TUNDevices = append(facts.TUNDevices, name)
-		case IsVPNName(name), strings.Contains(lowerPNP, "wireguard"),
-			strings.Contains(lowerPNP, "tailscale"), strings.Contains(lowerPNP, "openvpn"),
-			HasToken(description, "wireguard"), HasToken(description, "vpn"):
-			facts.VPNDevices = append(facts.VPNDevices, name)
-		case virtual && !knownInfra && !isKnownHypervisorPNP(lowerPNP):
-			facts.UnclassifiedVirtual = append(facts.UnclassifiedVirtual, name)
-		}
-	}
-}
-
-func looksVirtual(pnp string) bool {
-	for _, token := range []string{`root\`, `swd\`, `wintun`, `hyper-v`, `virtual`, `vmware`, `virtualbox`} {
-		if strings.Contains(pnp, token) {
-			return true
-		}
-	}
-	return false
-}
-
-// windowsAdapterDescriptions maps adapter instance GUIDs to DriverDesc.
-func windowsAdapterDescriptions() map[string]string {
-	const classKey = `SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}`
-	key, err := registry.OpenKey(registry.LOCAL_MACHINE, classKey,
-		registry.QUERY_VALUE|registry.ENUMERATE_SUB_KEYS)
-	if err != nil {
-		return nil
-	}
-	defer func() { _ = key.Close() }()
-	subkeys, err := key.ReadSubKeyNames(-1)
-	if err != nil {
-		return nil
-	}
-	out := map[string]string{}
-	for _, sub := range subkeys {
-		entry, err := registry.OpenKey(key, sub, registry.QUERY_VALUE)
-		if err != nil {
-			continue
-		}
-		instance, _, instanceErr := entry.GetStringValue("NetCfgInstanceId")
-		desc, _, _ := entry.GetStringValue("DriverDesc")
-		_ = entry.Close()
-		if instanceErr == nil && instance != "" && desc != "" {
-			out[strings.ToLower(instance)] = desc
-		}
-	}
-	return out
-}
-
-func isKnownHypervisorPNP(pnp string) bool {
-	for _, token := range []string{"virtualbox", "vmware", "hyper-v", "vbox", "kernel debug"} {
-		if strings.Contains(pnp, token) {
-			return true
-		}
-	}
-	return false
-}
-
-// interfaceIsUp checks the adapter flags captured by the common probe.
-func interfaceIsUp(facts *Facts, name string) bool {
-	for _, iface := range facts.Interfaces {
-		if iface.Name == name {
-			return strings.Contains(lowerASCII(iface.Flags), "up")
-		}
-	}
-	return false
-}
-
-// isInfrastructureVirtual excludes adapters that are known virtual network
-// infrastructure rather than potential tunnels.
-func isInfrastructureVirtual(name string) bool {
-	lower := lowerASCII(name)
-	for _, token := range []string{"vethernet", "vswitch", "default switch", "wsl", "loopback", "bluetooth", "本地连接", "内核调试", "kernel debug"} {
-		if strings.Contains(lower, token) {
-			return true
-		}
-	}
-	return false
-}
-
 func windowsDesktopProxy() (known, enabled bool, address string) {
 	key, err := registry.OpenKey(registry.CURRENT_USER, windowsInternetSettingsKey, registry.QUERY_VALUE)
 	if err != nil {
@@ -268,7 +151,7 @@ func currentProcessElevated() bool {
 
 func windowsDNS() ([]string, string, bool) {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE,
-		`SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces`, registry.QUERY_VALUE|registry.ENUMERATE_SUB_KEYS)
+		`SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces`, registry.QUERY_VALUE|registry.ENUMERATE_SUB_KEYS)
 	if err != nil {
 		return nil, "registry", false
 	}

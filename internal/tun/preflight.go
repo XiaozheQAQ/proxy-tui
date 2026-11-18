@@ -474,28 +474,47 @@ func checkTUNDevices(env Environment) Check {
 func checkUnclassifiedVirtual(env Environment) Check {
 	check := Check{ID: "unknown_virtual", Title: "Virtual adapters", Safety: true}
 	facts := env.Facts
-	if len(facts.UnclassifiedVirtual) == 0 {
-		check.Level = LevelReady
-		check.Detail = "no unrecognised virtual adapters"
-		return check
-	}
-	var carrying, idle []string
-	for _, name := range facts.UnclassifiedVirtual {
-		if len(carryingFamilies(facts, name)) > 0 {
-			carrying = append(carrying, name)
-		} else {
-			idle = append(idle, name)
+	split := func(names []string) (carrying, idle []string) {
+		for _, name := range names {
+			if len(carryingFamilies(facts, name)) > 0 {
+				carrying = append(carrying, name)
+			} else {
+				idle = append(idle, name)
+			}
 		}
+		return carrying, idle
 	}
-	if len(carrying) > 0 {
+	virtualCarrying, virtualIdle := split(facts.UnclassifiedVirtual)
+	unknownCarrying, unknownIdle := split(facts.UnknownAdapters)
+	hostCarrying, hostIdle := split(facts.HostOnlyDevices)
+
+	if len(virtualCarrying) > 0 || len(unknownCarrying) > 0 {
+		names := append(append([]string{}, virtualCarrying...), unknownCarrying...)
 		check.Level = LevelBlocked
-		check.Detail = "unrecognised virtual adapter carries the default route: " + strings.Join(carrying, ", ")
+		check.Detail = "unrecognised adapter carries the default route: " + strings.Join(names, ", ")
 		check.Hint = "identify and stop that client, or remove it from the default route; proxy-tui never guesses ownership"
 		return check
 	}
-	check.Level = LevelUnknown
-	check.Detail = "unrecognised virtual adapters present: " + strings.Join(idle, ", ")
-	check.Hint = "verify these are not tunnel adapters; if they are, stop them before enabling TUN"
+	if len(virtualIdle) > 0 || len(unknownIdle) > 0 {
+		names := append(append([]string{}, virtualIdle...), unknownIdle...)
+		check.Level = LevelUnknown
+		check.Detail = "adapters with unverified identity: " + strings.Join(names, ", ")
+		check.Hint = "verify these are not tunnel adapters; confirmed host-only adapters are excluded"
+		return check
+	}
+	if len(hostCarrying) > 0 {
+		check.Level = LevelWarning
+		check.Detail = "confirmed host-only adapter carries the default route: " + strings.Join(hostCarrying, ", ")
+		check.Hint = "unexpected for a host-only network; check the routing table, this is not a tunnel conflict"
+		return check
+	}
+	if len(hostIdle) > 0 {
+		check.Level = LevelReady
+		check.Detail = "confirmed host-only adapters: " + strings.Join(hostIdle, ", ")
+		return check
+	}
+	check.Level = LevelReady
+	check.Detail = "no unrecognised virtual adapters"
 	return check
 }
 

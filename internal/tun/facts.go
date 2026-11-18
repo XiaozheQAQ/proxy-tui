@@ -30,10 +30,17 @@ type Facts struct {
 	// UnclassifiedVirtual are virtual adapters that could not be attributed to
 	// a TUN or VPN. They are never guessed to be ours.
 	UnclassifiedVirtual []string `json:"unclassified_virtual,omitempty"`
-	MultipleDefaults    bool     `json:"multiple_defaults"`
-	DesktopProxyKnown   bool     `json:"desktop_proxy_known"`
-	DesktopProxyEnabled bool     `json:"desktop_proxy_enabled"`
-	DesktopProxyAddress string   `json:"desktop_proxy_address,omitempty"`
+	// HostOnlyDevices are adapters positively identified as host-only virtual
+	// networks by driver and device identity.
+	HostOnlyDevices []string `json:"host_only_devices,omitempty"`
+	// UnknownAdapters are present adapters whose identity could not be
+	// classified. They are never assumed to be harmless.
+	UnknownAdapters     []string      `json:"unknown_adapters,omitempty"`
+	Adapters            []AdapterInfo `json:"adapters,omitempty"`
+	MultipleDefaults    bool          `json:"multiple_defaults"`
+	DesktopProxyKnown   bool          `json:"desktop_proxy_known"`
+	DesktopProxyEnabled bool          `json:"desktop_proxy_enabled"`
+	DesktopProxyAddress string        `json:"desktop_proxy_address,omitempty"`
 	// DesktopProxyProbeKnown/Reachable tell whether the configured proxy
 	// endpoint currently accepts TCP connections.
 	DesktopProxyProbeKnown bool            `json:"desktop_proxy_probe_known"`

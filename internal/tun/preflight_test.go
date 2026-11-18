@@ -345,6 +345,82 @@ func TestPreflightCompletedButNotReady(t *testing.T) {
 	}
 }
 
+func TestHostOnlyAdapterIsReady(t *testing.T) {
+	env := readyEnvironment()
+	env.Facts.HostOnlyDevices = []string{"vboxnet"}
+	report := Evaluate(env)
+	if levelOf(report, "unknown_virtual") != LevelReady {
+		t.Errorf("unknown_virtual = %s", levelOf(report, "unknown_virtual"))
+	}
+	if !report.ActivationReady {
+		t.Errorf("confirmed host-only must not block activation: %+v", report.BlockingIssues)
+	}
+}
+
+func TestHostOnlyAdapterCarryingDefaultWarns(t *testing.T) {
+	env := readyEnvironment()
+	env.Facts.HostOnlyDevices = []string{"vboxnet"}
+	env.Facts.DefaultEgress = "vboxnet"
+	report := Evaluate(env)
+	if levelOf(report, "unknown_virtual") != LevelWarning {
+		t.Errorf("unknown_virtual = %s", levelOf(report, "unknown_virtual"))
+	}
+	if !report.ActivationReady {
+		t.Error("a confirmed host-only adapter is not a tunnel conflict")
+	}
+	if levelOf(report, "tun_devices") != LevelReady {
+		t.Errorf("host-only leaked into TUN conflicts: %s", levelOf(report, "tun_devices"))
+	}
+}
+
+func TestUnknownAdapterCarryingDefaultBlocks(t *testing.T) {
+	env := readyEnvironment()
+	env.Facts.UnknownAdapters = []string{"mystery0"}
+	env.Facts.DefaultEgress = "mystery0"
+	report := Evaluate(env)
+	if levelOf(report, "unknown_virtual") != LevelBlocked {
+		t.Errorf("unknown_virtual = %s", levelOf(report, "unknown_virtual"))
+	}
+	if report.ActivationReady {
+		t.Error("an unknown adapter carrying the default route must block")
+	}
+}
+
+func TestUnknownAdapterIdleIsSafetyUnknown(t *testing.T) {
+	env := readyEnvironment()
+	env.Facts.UnknownAdapters = []string{"mystery0"}
+	report := Evaluate(env)
+	if levelOf(report, "unknown_virtual") != LevelUnknown {
+		t.Errorf("unknown_virtual = %s", levelOf(report, "unknown_virtual"))
+	}
+	if report.ActivationReady {
+		t.Error("a safety UNKNOWN must block activation")
+	}
+}
+
+func TestHostOnlyAndVPNCoexist(t *testing.T) {
+	env := readyEnvironment()
+	env.Facts.HostOnlyDevices = []string{"vboxnet"}
+	env.Facts.VPNDevices = []string{"wg0"}
+	report := Evaluate(env)
+	if levelOf(report, "vpn") != LevelWarning {
+		t.Errorf("vpn = %s", levelOf(report, "vpn"))
+	}
+	if levelOf(report, "unknown_virtual") != LevelReady {
+		t.Errorf("unknown_virtual = %s", levelOf(report, "unknown_virtual"))
+	}
+	if !report.ActivationReady {
+		t.Error("idle VPN + host-only must not block")
+	}
+
+	env.Facts.TUNDevices = []string{"wg_tun"}
+	env.Facts.DefaultEgress = "wg_tun"
+	report = Evaluate(env)
+	if levelOf(report, "tun_devices") != LevelBlocked {
+		t.Errorf("tunnel default route = %s", levelOf(report, "tun_devices"))
+	}
+}
+
 func TestWinHTTPProxyWarning(t *testing.T) {
 	env := readyEnvironment()
 	env.Facts.WinHTTPEnabled = true

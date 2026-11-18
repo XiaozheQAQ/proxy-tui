@@ -52,6 +52,15 @@ Phase 3A/3B/3C: transactional network state, desktop system proxy and core-nativ
     configuration is labelled, and core identity now also includes the binary SHA-256.
   * `network tun preflight` exits 0 when the inspection completed; activation remains the
     job of `network tun enable`.
+  * Windows adapter identity classifier: reads InterfaceIndex, alias, description, PnP
+    device ID, hardware IDs, driver provider/service, manufacturer, component ID and
+    `*IfType`, then classifies as PHYSICAL / HOST_ONLY / VPN_TUNNEL / VPN_WIREGUARD /
+    VIRTUAL_UNKNOWN / UNKNOWN. VirtualBox Host-Only is accepted only when confirmed by
+    `VBoxNetAdp`/`sun_vboxnetadp` (never by display name); Wintun/xray is VPN_TUNNEL and
+    WireGuard is VPN_WIREGUARD. Confirmed host-only adapters no longer produce a safety
+    UNKNOWN; carrying the default route is only a warning. Unknown adapters carrying the
+    default route remain BLOCKED. Live host now reports `以太网 2` as HOST_ONLY (READY) and
+    `xray_tun` as VPN_TUNNEL (BLOCKED).
 
 ### Changed
 

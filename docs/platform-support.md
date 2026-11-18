@@ -58,6 +58,12 @@ result.
 | Conflict policy | external TUN carrying the IPv4/IPv6 default route → BLOCKED; idle external TUN → WARNING; unverified ownership → BLOCKED (default route) or UNKNOWN |
 | System proxy | WinINet/GSettings/networksetup plus WinHTTP and external proxy processes are reported as warnings; nothing is cleared automatically |
 | Activation gate | preflight completion ≠ activation; any BLOCKED or safety UNKNOWN refuses activation |
+| Windows adapter identity | InterfaceIndex, alias, description, PnP device ID, hardware IDs, driver provider/service, manufacturer, component ID, interface type (`*IfType`) |
+| Windows classification | `PHYSICAL`, `HOST_ONLY`, `VPN_TUNNEL`, `VPN_WIREGUARD`, `VIRTUAL_UNKNOWN`, `UNKNOWN`; decided from driver/PnP identity, never the display name |
+| VirtualBox Host-Only | `HOST_ONLY` only when confirmed by `VBoxNetAdp`/`sun_vboxnetadp` (Oracle provider); confirmed host-only adapters do not block and carrying the default route is only a warning |
+| Wintun / xray | `VPN_TUNNEL` from `wintun` service / `SWD\WINTUN` device; carrying the default route is BLOCKED |
+| WireGuard | `VPN_WIREGUARD` from the WireGuard driver/service; reported as a VPN warning |
+| Unknown identity | `VIRTUAL_UNKNOWN`/`UNKNOWN`; carrying the default route is BLOCKED, idle is UNKNOWN |
 
 ## Verification
 
@@ -91,9 +97,13 @@ Real runs performed for this iteration:
     `completed=true` / `activation_ready=no` with structured blocking issues, warnings and
     unknown facts. On the live host `xray_tun` carries the IPv4 default route and is
     correctly BLOCKED regardless of elevation; the WinINet proxy and the running
-    `v2rayN/xray` pair are warnings; `以太网 2` (VirtualBox host-only) is reported as an
-    unrecognised virtual adapter (UNKNOWN), which intentionally keeps activation blocked
-    until a human confirms it is not a tunnel.
+    `v2rayN/xray` pair are warnings.
+  * Windows adapter classification (2026-11-18): the inspector reads Windows PnP/driver
+    identity instead of trusting names. Live result: `以太网 2` (PnP `ROOT\NET\0000`,
+    service `VBoxNetAdp`, hardware ID `sun_vboxnetadp`, provider Oracle) → `HOST_ONLY` and
+    preflight `READY`; `xray_tun` (`SWD\WINTUN\{…}`, service `wintun`) → `VPN_TUNNEL` and
+    remains BLOCKED because it carries the IPv4 default route. `unknown facts` is now empty
+    for this host.
 * **Linux (Ubuntu 26.04 in WSL)**
   * `go test ./...` passes; cross-platform test defects found by this run were fixed.
   * Real `gsettings`/dconf round trip in an isolated `dbus-run-session`: enable set

@@ -158,8 +158,29 @@ Conflict policy:
   stale.
 
 Evidence from the live host: `xray_tun` (IPv4 default route) → BLOCKED, WinINet
-`127.0.0.1:10808` → WARNING, `v2rayN/xray` → WARNING, VirtualBox host-only adapter →
-UNKNOWN, `preflight completed=true`, `activation ready=no`.
+`127.0.0.1:10808` → WARNING, `v2rayN/xray` → WARNING, `preflight completed=true`,
+`activation ready=no`.
+
+### Windows adapter classification
+
+Windows adapters are classified from PnP and driver identity, not from the friendly name:
+
+| Class | Identity evidence |
+|---|---|
+| `HOST_ONLY` | VirtualBox Host-Only confirmed by `VBoxNetAdp`/`sun_vboxnetadp` (Oracle provider) |
+| `VPN_TUNNEL` | Wintun (`wintun` service, `SWD\WINTUN` PnP ID) and TAP drivers |
+| `VPN_WIREGUARD` | WireGuard driver/service |
+| `PHYSICAL` | PCI/USB/BTH/ACPI bus device without virtual markers |
+| `VIRTUAL_UNKNOWN` | ROOT/SWD/virtual device without a confirmed tunnel driver |
+| `UNKNOWN` | no usable PnP/driver metadata |
+
+Confirmed host-only adapters are excluded from TUN/unknown conflict checks; if one carries
+the default route it is a WARNING (not a tunnel conflict). Unknown adapters carrying the
+default route remain BLOCKED.
+
+Live result: `以太网 2` (PnP `ROOT\NET\0000`, service `VBoxNetAdp`, hardware ID
+`sun_vboxnetadp`) → `HOST_ONLY`, `READY`; `xray_tun` (service `wintun`) → `VPN_TUNNEL`,
+BLOCKED for carrying the IPv4 default route; `unknown facts` empty.
 
 ## Validation matrix (honest levels)
 
