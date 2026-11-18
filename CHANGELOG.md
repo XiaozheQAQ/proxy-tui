@@ -52,6 +52,9 @@ Phase 3A/3B/3C: transactional network state, desktop system proxy and core-nativ
     configuration is labelled, and core identity now also includes the binary SHA-256.
   * `network tun preflight` exits 0 when the inspection completed; activation remains the
     job of `network tun enable`.
+  * Live-test fix: the Windows DNS probe now ignores registry DNS entries of adapters that
+    no longer exist (removed Wintun/TUN and stale third-party adapters), so preflight reports
+    only DNS servers of currently present interfaces.
   * Windows adapter identity classifier: reads InterfaceIndex, alias, description, PnP
     device ID, hardware IDs, driver provider/service, manufacturer, component ID and
     `*IfType`, then classifies as PHYSICAL / HOST_ONLY / VPN_TUNNEL / VPN_WIREGUARD /

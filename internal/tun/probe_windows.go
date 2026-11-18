@@ -21,7 +21,7 @@ func platformFacts(_ context.Context, facts *Facts) {
 	} else {
 		facts.ElevationDetail = "process is not elevated; creating a Wintun adapter requires Administrator"
 	}
-	servers, source, known := windowsDNS()
+	servers, source, known := windowsDNS(*facts)
 	facts.DNSKnown = known
 	facts.DNSServers = servers
 	facts.DNSSource = source
@@ -149,7 +149,19 @@ func currentProcessElevated() bool {
 	return token.IsElevated()
 }
 
-func windowsDNS() ([]string, string, bool) {
+func windowsDNS(facts Facts) ([]string, string, bool) {
+	// Only interfaces that currently exist may contribute DNS servers; removed
+	// Wintun adapters leave their DNS values behind in the registry.
+	active := map[string]bool{}
+	present := map[string]bool{}
+	for _, iface := range facts.Interfaces {
+		present[lowerASCII(iface.Name)] = true
+	}
+	for name, conn := range windowsConnections() {
+		if present[name] {
+			active[strings.ToLower(conn.guid)] = true
+		}
+	}
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE,
 		`SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces`, registry.QUERY_VALUE|registry.ENUMERATE_SUB_KEYS)
 	if err != nil {
@@ -164,6 +176,9 @@ func windowsDNS() ([]string, string, bool) {
 	seen := map[string]bool{}
 	var servers []string
 	for _, name := range names {
+		if len(active) > 0 && !active[strings.ToLower(name)] {
+			continue
+		}
 		sub, err := registry.OpenKey(key, name, registry.QUERY_VALUE)
 		if err != nil {
 			continue

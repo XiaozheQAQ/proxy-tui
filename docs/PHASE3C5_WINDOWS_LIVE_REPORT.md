@@ -1,11 +1,10 @@
 # Phase 3C.5 Windows Live TUN Acceptance Report
 
-- Date: 2026-11-18 22:54 (Asia/Shanghai)
+- Date: 2026-11-18 23:05 (Asia/Shanghai)
 - Version: 0.2.0-dev
 - Branch: `test/phase3c5-windows-live`
-- Evidence: `%TEMP%\proxy-tui-upstream-20261118-224241` (Mihomo),
-  `%TEMP%\proxy-tui-singbox-20261118-225156` (sing-box)
-- Stage: **upstream qualification complete for both cores; TUN not started.**
+- Evidence: `%TEMP%\proxy-tui-tun-20261118-225700`
+- Result: **Mihomo and sing-box real TUN tested on Windows; both PASS for the tested scope.**
 
 ## Environment
 
@@ -15,82 +14,100 @@
 | Administrator | true |
 | Mihomo | 1.19.34 (test home `%TEMP%\pt-tun-live`) |
 | sing-box | 1.14.4 (test home) |
-| Egress | WLAN → 192.168.66.1; no IPv6 default route |
-| DNS | 1.1.1.1, 192.168.66.1, 8.8.8.8 |
+| Original egress | WLAN → 192.168.66.1; no IPv6 default route |
+| DNS | WLAN DHCP 192.168.66.1 |
 | WinINet | ProxyEnable=0; ProxyServer string retained `127.0.0.1:10808` |
 | WinHTTP | Direct |
-| Third-party | v2rayN/Xray not running; `xray_tun` absent |
-| Direct internet | **unavailable** from this host; proxied access works |
+| Third-party | v2rayN/Xray stopped before this round; `xray_tun` absent |
+| Direct internet | unavailable from this host; proxied access works |
 
-## Mihomo 1.19.34
-
-- Real subscription imported via stdin from the user's local file: **99 nodes**, Mihomo YAML;
-  URL/token never printed or passed as a command-line argument.
-- Explicit `mihomo -t` on the stored active config: **exit 0**.
-- Plain-mode start: RUNNING, PID 40532, API 127.0.0.1:9090.
-- Listeners: HTTP `7890`, SOCKS `7891` (both owned by this Mihomo process; the mixed-port
-  bind logged a fallback error, so the ports are reported as observed).
-- Real egress:
-  - HTTP proxy → `https://api.ipify.org`: **200**, egress IP **128.1.186.57** (twice).
-  - SOCKS5 hostname → **200**, same IP (proxy-side DNS resolution).
-  - Clash chain: `CF移动优选23 → 自动选择 → 节点选择 → 漏网之鱼`, selected node **Vless**.
-  - Core DNS `/dns/query` returned A records for `api.ipify.org`.
-- Normal stop: PASS; 0 mihomo processes; 7890/7891/9090 closed.
-- No TUN, route, DNS or system-proxy change.
-
-## sing-box 1.14.4
-
-- User-provided node URI list: **5 nodes** (4 vless, 1 hysteria2), imported as a node list.
-- Explicit `sing-box check` on the stored active config: **exit 0**.
-- Plain-mode start: RUNNING, PID 38348, API 127.0.0.1:9090.
-- Listener: mixed `127.0.0.1:7890`.
-- Real egress:
-  - HTTP proxy → `https://api.ipify.org`: **200**, egress IP **152.69.205.105** (twice).
-  - SOCKS5 hostname → **200**, same IP.
-  - Clash API: selector `proxy → auto`, URLTest `auto → Hysteria2`.
-- Normal stop: PASS; 0 sing-box processes; 7890/9090 closed.
-- No TUN, route, DNS or system-proxy change.
+Profiles: Mihomo `Real Upstream` (99 nodes), sing-box `Real sing-box` (5 nodes:
+4 vless + 1 hysteria2). Both real `mihomo -t` / `sing-box check` passed.
 
 ## Core test matrix
 
 | Test item | Mihomo 1.19.34 | sing-box 1.14.4 |
 |---|---|---|
-| Profile Import | PASS (99 nodes) | PASS (5 nodes) |
-| Config Validation (real binary) | PASS | PASS |
-| Core Start | PASS | PASS |
-| Proxy Listener | PASS (7890/7891) | PASS (7890) |
-| Real Node Reachability | PASS (Vless) | PASS (Hysteria2 via URLTest) |
-| TCP Egress | PASS (HTTP 200 ×2) | PASS (HTTP 200 ×2) |
-| DNS | PASS (core resolver); system takeover N/A in plain mode | PASS (SOCKS hostname; core resolves) |
+| Preflight | PASS (activation ready) | PASS (activation ready, 1 expected warning) |
+| Activation Ready | YES | YES |
+| Config Validation | PASS | PASS |
+| TUN Adapter | PASS (`Meta`, ifIndex 60) | PASS (`tun0`, ifIndex 61) |
+| Default Route | PASS (`198.18.0.2` via Meta) | PASS (`172.19.0.2` via tun0) |
+| IPv4 | PASS (egress 128.1.186.57) | PASS (egress 152.69.205.105) |
+| IPv6 | NOT APPLICABLE (no IPv6 default/stack; TUN ipv6=false) | NOT APPLICABLE |
+| DNS | PASS (Meta DNS 198.18.0.2; A + TCP queries resolved) | PASS (tun0 DNS 172.19.0.2; A queries resolved) |
+| TCP | PASS (HTTPS 200, twice) | PASS (HTTPS 200, twice) |
+| UDP | PASS (DNS over UDP via TUN) | PASS (DNS over UDP via TUN) |
+| QUIC | NOT TESTED (curl has no HTTP/3) | NOT TESTED |
+| LAN | PASS (ping gateway) | PASS (ping gateway) |
 | Normal Stop | PASS | PASS |
-| Process Cleanup | PASS | PASS |
-| TUN / Route / Leak | NOT TESTED (TUN not started) | NOT TESTED |
+| Interface Released | PASS | PASS |
+| TUI Crash Recovery | NOT TESTED (no interactive TUI in this harness) | NOT TESTED |
+| Core Crash Recovery | PASS (killed owned PID; adapter disappeared; next invocation recovered) | PASS (same) |
+
+### Mihomo details
+
+- Enable: PASS, "TUN is active"; adapter Meta, default route via 198.18.0.2.
+- `curl --noproxy "*"` (non-proxy-aware) → 200 with egress **128.1.186.57**, matching
+  the plain-mode proxy egress (direct was unavailable), twice.
+- DNS: Windows client resolved api.ipify.org A records and a TCP DNS query succeeded;
+  Meta interface DNS was 198.18.0.2 (core-managed).
+- LAN: ping 192.168.66.1 2/2 replies.
+- Disable: PASS, "TUN disabled; core resources released"; Meta removed, default route back
+  to WLAN, DNS restored, core stopped, no tun-state.
+
+### sing-box details
+
+- Enable: PASS; preflight warning that a DNS hijack rule was prepended (expected).
+- Adapter tun0, default route via 172.19.0.2; tun0 DNS 172.19.0.2.
+- `curl --noproxy "*"` → 200 with egress **152.69.205.105**, matching plain-mode proxy
+  egress (Hysteria2 via URLTest auto), twice.
+- DNS A queries resolved; LAN ping 2/2.
+- Disable: PASS; tun0 removed, routes/DNS restored, core stopped, no tun-state.
+
+### Crash recovery
+
+- Mihomo: enabled TUN, killed only the ProxyTUI-owned mihomo PID 44804. Wintun adapter
+  disappeared, routes returned to WLAN. The next ProxyTUI invocation performed startup
+  recovery and cleared the state; explicit `recover` reported "nothing to recover".
+- sing-box: same procedure with PID 1108; tun0 removed and state cleared by startup
+  recovery.
+
+### Defect found and fixed
+
+Live testing exposed stale DNS from removed adapters: the Windows probe read every
+TCP/IP interface registry subkey, so DNS of deleted TUN adapters (198.18.0.2,
+172.19.0.2) and the old xray_tun (1.1.1.1, 8.8.8.8) appeared in preflight. Fixed
+`windowsDNS` to consider only interfaces that currently exist, with a live regression test.
+After the fix, preflight reports only the active WLAN DNS (192.168.66.1).
 
 ## Network state comparison
 
-| Item | Before | After |
-|---|---|---|
-| IPv4 default | WLAN → 192.168.66.1 | unchanged |
-| IPv6 default | none | unchanged |
-| DNS | 1.1.1.1, 192.168.66.1, 8.8.8.8 | unchanged |
-| WinINet proxy | disabled (string retained) | unchanged |
-| WinHTTP | Direct | unchanged |
-| TUN adapters | 0 | 0 |
-| ProxyTUI TUN state | none | none |
-| ProxyTUI core processes | 0 | 0 |
+| Item | Before | Mihomo TUN | After Mihomo | sing-box TUN | After sing-box |
+|---|---|---|---|---|---|
+| IPv4 default | WLAN 192.168.66.1 | Meta 198.18.0.2 | WLAN | tun0 172.19.0.2 | WLAN |
+| TUN adapter | none | Meta (60) | none | tun0 (61) | none |
+| DNS (active) | WLAN 192.168.66.1 | + Meta 198.18.0.2 | WLAN | + tun0 172.19.0.2 | WLAN |
+| WinINet | disabled | unchanged | unchanged | unchanged | unchanged |
+| Core processes | 0 | 1 | 0 | 1 | 0 |
+| TUN state file | none | yes | none | yes | none |
+
+No route table flush, adapter deletion, DNS reset or third-party process stop was used.
 
 ## Judgment
 
-1. Mihomo has a real working upstream in plain mode: **YES**.
-2. sing-box has a real working upstream in plain mode: **YES**.
-3. TUN has **not** been tested; no route/DNS takeover occurred.
-4. Direct internet is unavailable on this host, so TUN leak tests will be evaluated against
-   the proxied path and the preserved physical route, not against a direct egress baseline.
-
-## Proposed next stage (requires explicit authorization)
-
-TUN acceptance for Mihomo first, then restore, then sing-box, then crash tests. Planned
-checks: preflight, TUN adapter, default route via TUN, IPv4 through the real node, IPv6
-(host has none), DNS hijack/leak evidence, TCP/UDP/QUIC where tooling permits, LAN, normal
-stop/interface release, TUI/core crash recovery, and final restoration of the original
-proxy client state. No TUN will be started without explicit confirmation.
+1. Mihomo TUN really usable? **YES** (tested scope).
+2. sing-box TUN really usable? **YES** (tested scope).
+3. TCP / UDP normal? **YES**; QUIC not tested (no HTTP/3 client).
+4. DNS leak? No leak observed: DNS was served through the TUN interface DNS and resolved;
+   packet-capture-level proof was not performed.
+5. IPv4 leak? No leak observed: non-proxy-aware traffic exited via the real node; direct
+   egress was unavailable. IPv6: not applicable (no IPv6 default route, TUN IPv6 disabled).
+6. Normal stop releases interfaces? **YES**, both cores.
+7. TUI crash recovery? **NOT TESTED** (no interactive TUI in this harness; cross-process
+   state adoption and startup recovery were exercised by separate CLI invocations).
+8. Core crash recovery? **YES**, both cores (owned PID killed; recovered on next invocation).
+9. Original environment restored? **YES**: WLAN default route, WLAN DNS, proxy disabled,
+   xray_tun absent, no ProxyTUI processes or TUN state.
+10. Phase 3D entry? Core/TUN acceptance passed except TUI-crash and QUIC coverage; recommend
+    one interactive TUI crash test before formally starting Phase 3D.
