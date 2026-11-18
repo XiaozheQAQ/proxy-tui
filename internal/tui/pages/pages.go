@@ -84,6 +84,7 @@ const (
 	ActionToggleTunIPv6     ActionKind = "toggle-tun-ipv6"
 	ActionRunTUNPreflight   ActionKind = "run-tun-preflight"
 	ActionRecoverTUN        ActionKind = "recover-tun"
+	ActionVerifyProxy       ActionKind = "verify-proxy"
 	ActionAddProfile        ActionKind = "add-profile"
 	ActionHelp              ActionKind = "help"
 	ActionCommandPalette    ActionKind = "command-palette"
@@ -108,6 +109,16 @@ type FeatureState struct {
 	Detail  string
 }
 
+// ProxyCheck is the last explicit end-to-end proxy verification.
+type ProxyCheck struct {
+	Attempted bool
+	OK        bool
+	Address   string
+	ExitIP    string
+	LatencyMS int64
+	Err       string
+}
+
 // OverviewData is everything the overview page shows.
 type OverviewData struct {
 	Core           model.CoreKind
@@ -123,6 +134,8 @@ type OverviewData struct {
 	ProxiesErr     string
 	SystemProxy    FeatureState
 	TUN            FeatureState
+	TrafficMode    string
+	ProxyCheck     ProxyCheck
 	LastError      string
 }
 

@@ -19,6 +19,7 @@ const (
 	IntentNone IntentKind = iota
 	IntentCancel
 	IntentSubmit
+	IntentTest
 )
 
 // Intent is the result of one dialog update.
@@ -55,6 +56,12 @@ type ProxyResult struct {
 	Core  string
 	Group string
 	Name  string
+}
+
+// ProxyTestRequest asks the root model to measure one proxy delay.
+type ProxyTestRequest struct {
+	Core string
+	Name string
 }
 
 // ConfirmResult is the payload of a confirmation dialog.

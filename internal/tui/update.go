@@ -31,6 +31,10 @@ type actionResultMsg struct {
 	report      *tun.Report
 }
 
+type connectivityMsg struct {
+	result app.ProxyConnectivity
+}
+
 type preflightMsg struct {
 	report tun.Report
 	err    error
@@ -126,6 +130,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.refreshCmd(), m.saveSettings())
 		}
 		return m, m.refreshCmd()
+
+	case connectivityMsg:
+		m.busy = ""
+		m.connectivity = typed.result
+		m.rebuildData()
+		lines := []string{
+			"target: " + typed.result.Address,
+		}
+		if typed.result.OK {
+			lines = append(lines,
+				"exit IP: "+typed.result.ExitIP,
+				fmt.Sprintf("latency: %d ms", typed.result.LatencyMS),
+				"HTTP request went through the local proxy port (not the system proxy).",
+			)
+			m.notice("ok", "proxy connectivity: %s (%d ms)", typed.result.ExitIP, typed.result.LatencyMS)
+		} else {
+			lines = append(lines, "error: "+typed.result.Err)
+			m.notice("error", "proxy connectivity failed: %s", typed.result.Err)
+		}
+		if m.effectiveTrafficMode() == network.ModeOff {
+			lines = append(lines, "", "traffic mode is OFF: this proves the local proxy works, but system traffic is not redirected.")
+		}
+		m.setDialog(dialogs.NewInfo("PROXY CONNECTIVITY", lines))
+		return m, nil
 
 	case preflightMsg:
 		m.busy = ""
@@ -320,6 +348,15 @@ func (m *Model) updateDialog(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, m.cmdSelectProxy(kind, payload.Group, payload.Name)
+		case dialogs.ProxyTestRequest:
+			m.dialog = nil
+			kind, err := model.ParseCoreKind(payload.Core)
+			if err != nil {
+				m.notice("error", "%s", err.Error())
+				return m, nil
+			}
+			m.busy = "testing " + payload.Name
+			return m, m.cmdTestProxy(kind, payload.Name)
 		case dialogs.ConfirmResult:
 			target := m.confirm
 			m.dialog = nil
@@ -379,8 +416,15 @@ func (m *Model) dispatch(action pages.Action) tea.Cmd {
 			m.notice("warn", "%s is not running", action.Core.DisplayName())
 			return nil
 		}
+		if m.live.kind != action.Core || len(m.live.proxies) == 0 {
+			m.notice("warn", "no proxy groups loaded for %s yet; press R to refresh", action.Core.DisplayName())
+			return nil
+		}
 		m.setDialog(dialogs.NewProxyPicker(action.Core, m.live.proxies))
 		return nil
+	case pages.ActionVerifyProxy:
+		m.busy = "verifying proxy connectivity"
+		return m.cmdVerifyProxy()
 	case pages.ActionTestProxies:
 		if !m.statusOf(action.Core).Running {
 			m.notice("warn", "%s is not running", action.Core.DisplayName())
@@ -513,12 +557,25 @@ func (m *Model) handleImportResult(result importResultMsg) (tea.Model, tea.Cmd) 
 	}
 
 	m.dialog = nil
+	if success > 0 {
+		for _, outcome := range result.outcomes {
+			if outcome.Err == nil && outcome.Profile.Core.Valid() {
+				m.core = outcome.Profile.Core
+				if outcome.Profile.Core == model.CoreSingBox {
+					m.setPage(pages.IDSingBox)
+				} else {
+					m.setPage(pages.IDMihomo)
+				}
+				break
+			}
+		}
+	}
 	if len(failures) > 0 {
 		m.notice("warn", "imported %d profile(s), %d failed: %s", success, len(failures), failures[0])
 	} else if warnings > 0 {
-		m.notice("ok", "imported %d profile(s) with %d warning(s)", success, warnings)
+		m.notice("ok", "imported %d profile(s) with %d warning(s) — press Enter to activate, s to start, p to pick a node", success, warnings)
 	} else {
-		m.notice("ok", "imported %d profile(s)", success)
+		m.notice("ok", "imported %d profile(s) — press Enter to activate, s to start, p to pick a node", success)
 	}
 	return m, m.refreshCmd()
 }
@@ -760,7 +817,7 @@ func (m *Model) cmdStartCore(kind model.CoreKind) tea.Cmd {
 		if err := application.StartCore(ctx, kind); err != nil {
 			return actionResultMsg{label: "start " + kind.DisplayName(), err: err}
 		}
-		return actionResultMsg{label: kind.DisplayName() + " started"}
+		return actionResultMsg{label: kind.DisplayName() + " started — press p to choose a node"}
 	}
 }
 
@@ -796,7 +853,44 @@ func (m *Model) cmdSelectProxy(kind model.CoreKind, group, name string) tea.Cmd 
 		if err := application.Cores.SelectProxy(ctx, kind, group, name); err != nil {
 			return actionResultMsg{label: "select " + name, err: err}
 		}
+		proxies, err := application.Cores.Proxies(ctx, kind)
+		if err != nil {
+			return actionResultMsg{label: group + " → " + name, err: fmt.Errorf("selection sent, but the core API could not be re-read: %w", err)}
+		}
+		for _, proxy := range proxies {
+			if proxy.Name == group {
+				if proxy.Now != name {
+					return actionResultMsg{label: group + " → " + name, err: fmt.Errorf("core reports %q as the active selection", proxy.Now)}
+				}
+				break
+			}
+		}
 		return actionResultMsg{label: group + " → " + name}
+	}
+}
+
+func (m *Model) cmdVerifyProxy() tea.Cmd {
+	application := m.app
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		return connectivityMsg{result: application.VerifyProxyConnectivity(ctx)}
+	}
+}
+
+func (m *Model) cmdTestProxy(kind model.CoreKind, name string) tea.Cmd {
+	application := m.app
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		delay, err := application.Cores.TestDelay(ctx, kind, name, 8*time.Second)
+		if err != nil {
+			return actionResultMsg{label: "test " + name, err: err}
+		}
+		if delay <= 0 {
+			return actionResultMsg{label: "test " + name, err: fmt.Errorf("node did not respond")}
+		}
+		return actionResultMsg{label: fmt.Sprintf("test %s: %d ms", name, delay)}
 	}
 }
 

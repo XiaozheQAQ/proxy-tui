@@ -46,6 +46,8 @@ func (p *Overview) Update(msg tea.Msg) (Page, *Action, tea.Cmd) {
 			return p, &Action{Kind: ActionProxyPicker, Core: p.data.Core}, nil
 		case "t":
 			return p, &Action{Kind: ActionTestProxies, Core: p.data.Core}, nil
+		case "v":
+			return p, &Action{Kind: ActionVerifyProxy, Core: p.data.Core}, nil
 		}
 	}
 	return p, nil, nil
@@ -58,6 +60,7 @@ func (p *Overview) Hints() []layout.Hint {
 		{Key: "r", Label: "restart"},
 		{Key: "p", Label: "nodes"},
 		{Key: "t", Label: "test"},
+		{Key: "v", Label: "verify"},
 		{Key: "A", Label: "add"},
 	}
 }
@@ -112,6 +115,8 @@ func (p *Overview) coreBody(theme layout.Theme, width int) string {
 		{"State", components.Badge(theme, status.Label(), tone)},
 		{"Version", dash(status.Version)},
 		{"Profiles", fmt.Sprintf("%d", p.data.ProfileCount)},
+		{"Traffic mode", p.data.TrafficMode},
+		{"Proxy check", proxyCheckLabel(p.data.ProxyCheck)},
 		{"Desktop proxy", desktop},
 	}
 	body := components.KeyValueLines(theme, pairs, width)
@@ -162,6 +167,16 @@ func (p *Overview) profileBody(theme layout.Theme, width int) string {
 			Render("  "+format.Truncate(profile.Warnings[len(profile.Warnings)-1], width-4))
 	}
 	return body
+}
+
+func proxyCheckLabel(check ProxyCheck) string {
+	if !check.Attempted {
+		return "not checked (press v)"
+	}
+	if !check.OK {
+		return "FAILED"
+	}
+	return fmt.Sprintf("ok · %s · %d ms", check.ExitIP, check.LatencyMS)
 }
 
 func (p *Overview) proxyBody(theme layout.Theme, width int) string {

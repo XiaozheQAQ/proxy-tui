@@ -80,6 +80,8 @@ func (p *CorePage) Update(msg tea.Msg) (Page, *Action, tea.Cmd) {
 			return p, &Action{Kind: ActionTestProxies, Core: p.kind}, nil
 		case "p":
 			return p, &Action{Kind: ActionProxyPicker, Core: p.kind}, nil
+		case "v":
+			return p, &Action{Kind: ActionVerifyProxy, Core: p.kind}, nil
 		}
 	}
 	return p, nil, nil
@@ -93,6 +95,8 @@ func (p *CorePage) Hints() []layout.Hint {
 		{Key: "x", Label: "stop"},
 		{Key: "u", Label: "update"},
 		{Key: "d", Label: "delete"},
+		{Key: "p", Label: "proxies"},
+		{Key: "v", Label: "verify"},
 		{Key: "A", Label: "add"},
 	}
 }

@@ -80,6 +80,29 @@ proxy network system-proxy enable
 proxy status
 ```
 
+## Choosing a proxy node
+
+The TUI has a real proxy browser backed by the core's Clash-compatible API:
+
+* Press `p` on Overview or a core page to open **PROXIES**.
+* Left pane lists root proxy groups; right pane lists their members. Enter on a group
+  member opens that nested group; Esc goes back one level.
+* Enter on a leaf selects it in a `Selector` group; `s` selects a group member as the value
+  of the parent. `URLTest`/`Fallback`/`LoadBalance` groups stay automatic and refuse manual
+  selection. `DIRECT` and `REJECT` are labelled and can be selected when the core allows it.
+* `t` tests the highlighted node, `/` searches members, `R` refreshes the status.
+* Selection talks to the running core; it does **not** change the system proxy or TUN.
+
+**Core running is not the same as proxy connected.** Press `v` on Overview or a core page
+for an explicit end-to-end check: ProxyTUI sends an HTTP request through its local proxy
+port (never through the system proxy) and reports the exit IP, latency, or the exact error.
+The Overview also shows the current `Traffic mode` (off / system proxy / TUN) and the last
+proxy check, so "running but not redirecting traffic" is visible.
+
+After importing a subscription the TUI focuses the core page and suggests the next steps:
+Enter activates the profile, `s` starts the core, `p` opens the node browser. Import never
+starts a core or enables global takeover by itself.
+
 ## Traffic takeover
 
 Exactly one mode is active at a time; the TUI and CLI share the same state machine.

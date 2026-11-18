@@ -52,6 +52,14 @@ Phase 3A/3B/3C: transactional network state, desktop system proxy and core-nativ
     configuration is labelled, and core identity now also includes the binary SHA-256.
   * `network tun preflight` exits 0 when the inspection completed; activation remains the
     job of `network tun enable`.
+  * Proxy browsing and selection: a real Proxies dialog backed by `/proxies` with
+    recursive Selector navigation, automatic-group refusal, DIRECT/REJECT labels, member
+    search, per-node delay testing, and post-selection `now` verification. Root groups are
+    computed from API references; selecting a parent never rewrites a child group's value.
+  * End-to-end proxy check (`v`): HTTP request through the local mixed port with exit IP and
+    latency, explicitly not using the system proxy. Overview now shows Traffic mode
+    (off/system proxy/TUN) and the last proxy check, so "core running" is not presented as
+    "connected". Import focuses the core page and suggests activate/start/pick-node steps.
   * TUI traffic-mode safety: every mode change requires an explicit confirmation; while a
     confirmation or action is active, global shortcuts are ignored; the system proxy is only
     enabled after the core process and local proxy port are verified; `/tun` and

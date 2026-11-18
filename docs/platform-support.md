@@ -65,6 +65,22 @@ result.
 | WireGuard | `VPN_WIREGUARD` from the WireGuard driver/service; reported as a VPN warning |
 | Unknown identity | `VIRTUAL_UNKNOWN`/`UNKNOWN`; carrying the default route is BLOCKED, idle is UNKNOWN |
 
+## Proxy selection support
+
+| Capability | Mihomo | sing-box |
+|---|---|---|
+| Read proxy groups and nodes | yes (`/proxies`) | yes when `experimental.clash_api` is enabled (the bundled template enables it) |
+| Show current selection (`now`) | yes | yes |
+| Manual selection | `Selector` groups via `PUT` | Clash-compatible `Selector` groups via `PUT` |
+| Automatic groups (URLTest/Fallback/LoadBalance) | shown, manual selection refused | shown if exposed; manual selection refused |
+| Node delay test | `/proxies/{name}/delay` | Clash-compatible delay endpoint |
+| Nested group navigation | yes | yes, limited to groups the Clash API exposes |
+| DIRECT / REJECT | labelled, selectable where the core allows | exposed by the API; labelled |
+
+The browser is core-agnostic: it consumes exactly what the Clash API reports. If a sing-box
+build or configuration does not enable the Clash API, proxy browsing is unavailable and the
+TUI reports the API error instead of inventing groups.
+
 ## Verification
 
 Real runs performed for this iteration:

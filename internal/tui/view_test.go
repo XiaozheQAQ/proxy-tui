@@ -140,9 +140,12 @@ func TestImportThroughModel(t *testing.T) {
 	if len(ui.app.Subs.List()) != 1 {
 		t.Fatalf("profiles = %d, want 1", len(ui.app.Subs.List()))
 	}
+	if ui.page != pages.IDMihomo {
+		t.Fatalf("import should focus the imported core page, got %s", ui.page)
+	}
 	view := ui.View()
-	if !strings.Contains(view, "ACTIVE PROFILE") {
-		t.Errorf("overview did not render:\n%s", view)
+	if !strings.Contains(view, "PROFILES") {
+		t.Errorf("core page did not render:\n%s", view)
 	}
 }
 
@@ -208,7 +211,7 @@ func TestProxyPickerRenders(t *testing.T) {
 	ui := newTestModel(t, 100, 30)
 	ui.setDialog(dialogs.NewProxyPicker(model.CoreMihomo, testProxies()))
 	view := ui.View()
-	if !strings.Contains(view, "SELECT PROXY") {
+	if !strings.Contains(view, "PROXIES") {
 		t.Fatalf("picker not rendered:\n%s", view)
 	}
 }

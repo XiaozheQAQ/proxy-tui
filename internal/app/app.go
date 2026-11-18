@@ -3,11 +3,16 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/proxytui/proxy-tui/internal/core"
@@ -249,6 +254,79 @@ func (a *App) ApplyTrafficMode(ctx context.Context, mode network.Mode, kind mode
 	default:
 		return result, fmt.Errorf("unknown traffic mode %q", mode)
 	}
+}
+
+// ProxyConnectivity is the result of an explicit end-to-end proxy check.
+type ProxyConnectivity struct {
+	Attempted bool
+	OK        bool
+	Address   string
+	ExitIP    string
+	LatencyMS int64
+	Err       string
+	CheckedAt time.Time
+}
+
+// proxyProbeURL is the endpoint used to confirm that traffic really leaves via
+// the local proxy. It is a variable so tests can point it at a local server.
+var proxyProbeURL = "https://api.ipify.org?format=json"
+
+// VerifyProxyConnectivity sends an HTTP request explicitly through the local
+// proxy port and reports the observed exit IP. It never uses the system proxy.
+func (a *App) VerifyProxyConnectivity(ctx context.Context) ProxyConnectivity {
+	address := a.OwnProxyAddress()
+	result := ProxyConnectivity{Attempted: true, Address: address, CheckedAt: time.Now()}
+	ip, latency, err := probeThroughProxy(ctx, address, proxyProbeURL)
+	result.LatencyMS = latency.Milliseconds()
+	if err != nil {
+		result.Err = err.Error()
+		return result
+	}
+	result.OK = true
+	result.ExitIP = ip
+	return result
+}
+
+func probeThroughProxy(ctx context.Context, address, target string) (string, time.Duration, error) {
+	if err := proxyListening(address, 700*time.Millisecond); err != nil {
+		return "", 0, fmt.Errorf("proxy port %s is not listening: %w", address, err)
+	}
+	proxyURL, err := url.Parse("http://" + address)
+	if err != nil {
+		return "", 0, fmt.Errorf("parse proxy address: %w", err)
+	}
+	client := &http.Client{
+		Timeout: 12 * time.Second,
+		Transport: &http.Transport{
+			Proxy:             http.ProxyURL(proxyURL),
+			DisableKeepAlives: true,
+		},
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return "", 0, err
+	}
+	start := time.Now()
+	response, err := client.Do(request)
+	if err != nil {
+		return "", 0, fmt.Errorf("proxy request failed: %w", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return "", 0, fmt.Errorf("proxy request returned HTTP %d", response.StatusCode)
+	}
+	ip := strings.TrimSpace(string(body))
+	var payload struct {
+		IP string `json:"ip"`
+	}
+	if err := json.Unmarshal(body, &payload); err == nil && payload.IP != "" {
+		ip = payload.IP
+	}
+	if ip == "" {
+		return "", 0, fmt.Errorf("proxy response did not contain an exit address")
+	}
+	return ip, time.Since(start), nil
 }
 
 // proxyListening verifies that the local proxy endpoint accepts TCP before the

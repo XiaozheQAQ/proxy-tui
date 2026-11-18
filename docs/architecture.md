@@ -70,6 +70,21 @@ configs/templates             embedded base configs for node-only subscriptions
    can adopt the running core: status, proxies, traffic and stop all keep working.
 6. The TUI polls traffic and connections once per second through the Clash API.
 
+## Data flow: proxy browsing, selection and connectivity
+
+1. The refresh loop calls `Cores.Proxies` for the running core; the Clash API response is
+   mapped to `core.Proxy` entries (type, `now`, members, delay history, health).
+2. `p` opens `dialogs.ProxyPicker` with the full list. Root groups are those not referenced
+   as a member of another non-GLOBAL group; selectors sort before automatic groups.
+3. Enter on a group member pushes it on the navigation stack (Esc pops), Enter on a leaf in
+   a `Selector` emits `ProxyResult`; automatic groups refuse manual selection. `s` selects a
+   group member itself. `t` emits a test intent, which calls the delay endpoint.
+4. The TUI sends `PUT /proxies/{group}` via `Cores.SelectProxy`, re-reads `/proxies` and
+   only reports success when the group's `now` matches the requested member.
+5. `v` runs `VerifyProxyConnectivity`: a TCP check of the local mixed port followed by an
+   HTTP request with that port as the proxy. The result (exit IP, latency or error) is shown
+   in a dialog and on the Overview. The system proxy is never used for this check.
+
 ## Data flow: TUI traffic-mode change
 
 1. A page action (Settings row, header toggle, or `/tun` / `/system-proxy` command) is routed

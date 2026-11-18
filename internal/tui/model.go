@@ -36,11 +36,12 @@ type Model struct {
 	core     model.CoreKind
 	pages    map[pages.ID]pages.Page
 
-	profiles []model.Profile
-	statuses map[model.CoreKind]core.Status
-	live     liveState
-	network  network.Report
-	tun      tun.Status
+	profiles     []model.Profile
+	statuses     map[model.CoreKind]core.Status
+	live         liveState
+	network      network.Report
+	tun          tun.Status
+	connectivity app.ProxyConnectivity
 
 	settings storage.Settings
 
@@ -152,7 +153,16 @@ func (m *Model) rebuildData() {
 		Connections: len(m.liveConns()),
 		SystemProxy: systemProxy,
 		TUN:         tunFeature(m.tun),
-		Proxies:     m.liveProxies(),
+		TrafficMode: m.trafficModeLabel(),
+		ProxyCheck: pages.ProxyCheck{
+			Attempted: m.connectivity.Attempted,
+			OK:        m.connectivity.OK,
+			Address:   m.connectivity.Address,
+			ExitIP:    m.connectivity.ExitIP,
+			LatencyMS: m.connectivity.LatencyMS,
+			Err:       m.connectivity.Err,
+		},
+		Proxies: m.liveProxies(),
 	}
 	if !status.Running {
 		overview.Proxies = nil
@@ -241,6 +251,24 @@ func (m *Model) statusOf(kind model.CoreKind) core.Status {
 		return status
 	}
 	return core.Status{Core: kind}
+}
+
+func (m *Model) trafficModeLabel() string {
+	if m.tun.Enabled {
+		detail := "TUN"
+		if m.tun.Interface != "" {
+			detail += " · " + m.tun.Interface
+		}
+		return detail
+	}
+	if m.network.Desktop.Enabled {
+		return "System Proxy · " + m.network.Desktop.Address()
+	}
+	mode := network.Mode(m.settings.TrafficMode)
+	if mode == "" {
+		mode = network.ModeOff
+	}
+	return mode.Display()
 }
 
 func (m *Model) liveTraffic() core.Traffic {
