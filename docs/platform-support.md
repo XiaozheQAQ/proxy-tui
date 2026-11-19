@@ -71,7 +71,7 @@ result.
 |---|---|---|---|
 | Supervisor process | yes (detached, per user) | yes (setsid, per user) | yes (setsid, per user) |
 | IPC transport | AF_UNIX under LocalAppData (verified) | Unix socket 0600 | Unix socket 0600 |
-| Named Pipe / SID ACL | **not implemented** | n/a | n/a |
+| Named Pipe / SID ACL | **not shipped** (AF_UNIX) | n/a | n/a |
 | Single instance | atomic socket bind | atomic socket bind | atomic socket bind |
 | Peer authentication | no (AF_UNIX) | yes (SO_PEERCRED) | yes (LOCAL_PEERCRED) |
 | Shared settings writes | supervisor IPC | supervisor IPC | supervisor IPC |

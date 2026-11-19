@@ -52,6 +52,10 @@ Phase 3A/3B/3C: transactional network state, desktop system proxy and core-nativ
     configuration is labelled, and core identity now also includes the binary SHA-256.
   * `network tun preflight` exits 0 when the inspection completed; activation remains the
     job of `network tun enable`.
+  * Phase 3D.2.2 hardening: operation result lifecycle (`proxy operation status`,
+    RUNNING/SUCCEEDED/FAILED/EXPIRED with a five-minute bounded cache) and shared settings
+    ownership. A Windows Named Pipe transport was prototyped but reverted due handle
+    lifecycle crashes; Windows remains on AF_UNIX without SID-level authentication.
   * Phase 3D.2 hardening: shared settings writes now go through supervisor
     `UpdateSettings` (no direct config writes from TUI/CLI), mutation requests carry
     OperationIDs with a five-minute dedupe cache, and the remote frontend retries transport

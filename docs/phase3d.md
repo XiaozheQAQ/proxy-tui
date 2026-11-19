@@ -32,7 +32,8 @@ outstanding. 3D.3/3D.4 not started.**
 - Write requests carry an OperationID. The supervisor caches mutation results for five
   minutes and returns the cached result for a retried ID, so a lost response cannot start a
   core twice. The remote frontend retries transport failures with 1s/2s/5s/10s backoff and
-  reuses the same OperationID.
+  reuses the same OperationID. `proxy operation status <id>` queries the result without
+  re-executing.
 - The TUI shows `Supervisor CONNECTED/DISCONNECTED` on Overview and blocks mutations while
   disconnected. The refresh loop calls `Health` and clears live state on failure instead of
   showing stale data as current.
@@ -72,7 +73,9 @@ an explicit SID ACL remains required before claiming Windows IPC security.
   supervisor process itself has exited, the remote client does not auto-ensure a new
   supervisor yet; the TUI reports DISCONNECTED and blocks writes until a supervisor is
   started manually.
-- Windows Named Pipe/SID ACL and cross-user denial are missing.
+- Windows Named Pipe/SID ACL and cross-user denial are missing. A Named Pipe transport was
+  attempted in this round but was reverted after handle-lifecycle crashes; Windows remains
+  on AF_UNIX without peer authentication.
 - Payload fuzzing, secret-in-log tests and route-replacement tests are not added.
 - TUI-internal Disable (Phase 3C.6) still requires real manual acceptance.
 - 3D.3 health monitor/auto-restart and 3D.4 autostart are not started.
