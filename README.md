@@ -121,11 +121,13 @@ ProxyTUI now ships a per-user detached supervisor and a versioned local IPC endp
 - IPC is a local Unix-domain socket (Windows 10+ AF_UNIX) with length-framed JSON,
   request IDs, deadlines, version checks and serialized mutations. No TCP is exposed.
 
-**Current boundary:** TUI and CLI now run through the supervisor via a remote
-`app.Frontend`; bare `proxy` ensures the supervisor, and no production command falls back
-to a local core manager. Windows still uses AF_UNIX without peer-credential/Named Pipe SID
-ACL enforcement, there is no reconnect/backoff yet, and health monitoring/auto-restart/
-autostart are not implemented. See `docs/phase3d.md` and `docs/supervisor.md`.
+**Current boundary:** TUI and CLI run through the supervisor via a remote `app.Frontend`;
+bare `proxy` ensures the supervisor and no production command falls back to a local core
+manager. Shared settings writes go through `UpdateSettings`, mutation requests use
+OperationIDs with supervisor-side deduplication, and the client retries transport failures
+with bounded backoff. Windows still uses AF_UNIX without Named Pipe/SID ACL enforcement;
+supervisor auto-restart after a process exit, multi-TUI live validation, health monitoring
+and autostart are not implemented. See `docs/phase3d.md` and `docs/supervisor.md`.
 
 ## Traffic takeover
 

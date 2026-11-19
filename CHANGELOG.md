@@ -52,6 +52,11 @@ Phase 3A/3B/3C: transactional network state, desktop system proxy and core-nativ
     configuration is labelled, and core identity now also includes the binary SHA-256.
   * `network tun preflight` exits 0 when the inspection completed; activation remains the
     job of `network tun enable`.
+  * Phase 3D.2 hardening: shared settings writes now go through supervisor
+    `UpdateSettings` (no direct config writes from TUI/CLI), mutation requests carry
+    OperationIDs with a five-minute dedupe cache, and the remote frontend retries transport
+    failures with bounded backoff (1s/2s/5s/10s). Windows Named Pipe/SID ACL and
+    supervisor auto-ensure after a process exit remain open.
   * Phase 3D.2 client migration: `app.Frontend` abstraction, remote frontend over `app.call`,
     TUI/CLI ensure the supervisor automatically, production local fallback removed, TUI
     CONNECTED/DISCONNECTED state with mutation blocking, Unix peer-UID verification, and

@@ -32,6 +32,10 @@ local socket and constructs a remote `app.Frontend`; the local application is bu
 inside the supervisor. A test-only in-package flag exists for unit tests and is not reachable
 from the environment or CLI.
 
+Shared settings are written through `UpdateSettings`. The remote frontend reconnects on
+transport failures with bounded backoff and reuses OperationIDs; the supervisor deduplicates
+retried mutations. If the supervisor process is gone, it is not auto-restarted yet.
+
 The TUI Overview shows `Supervisor CONNECTED/DISCONNECTED` and blocks mutations while
 disconnected. There is no automatic reconnect/backoff yet; a later refresh reports the
 disconnect. See `docs/phase3d.md` for the remaining security and validation gaps.

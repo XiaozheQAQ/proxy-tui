@@ -25,6 +25,14 @@ outstanding. 3D.3/3D.4 not started.**
   in-package test flag, not an environment variable or CLI flag.
 - A supervisor facade call is reflection-dispatched over `app.call` with the Facade as the
   only reachable target; mutation methods are serialized by the supervisor mutex.
+- Shared settings (theme, traffic mode, TUN defaults, update policy) are read and written
+  through `SettingsSnapshot`/`UpdateSettings`; TUI and CLI no longer write `config.json`
+  directly. The supervisor writes atomically and updates its in-memory copy only after a
+  successful write.
+- Write requests carry an OperationID. The supervisor caches mutation results for five
+  minutes and returns the cached result for a retried ID, so a lost response cannot start a
+  core twice. The remote frontend retries transport failures with 1s/2s/5s/10s backoff and
+  reuses the same OperationID.
 - The TUI shows `Supervisor CONNECTED/DISCONNECTED` on Overview and blocks mutations while
   disconnected. The refresh loop calls `Health` and clears live state on failure instead of
   showing stale data as current.
@@ -57,10 +65,13 @@ an explicit SID ACL remains required before claiming Windows IPC security.
 
 ## Remaining gaps (not COMPLETE)
 
-- TUI/CLI are migrated in code, but multi-TUI live mutation tests (two TUI processes +
-  concurrent node/Traffic Mode changes) were not performed with an interactive TUI.
-- No automatic IPC reconnect/backoff after a disconnect; the next refresh only reports
-  DISCONNECTED and blocks writes.
+- TUI/CLI are migrated in code. Multi-TUI live mutation tests (two interactive TUIs +
+  concurrent node/Traffic Mode changes) are still not performed; only CLI concurrency and
+  single-TUI startup/exit were exercised.
+- Bounded transport reconnect is implemented (1s/2s/5s/10s, same OperationID). If the
+  supervisor process itself has exited, the remote client does not auto-ensure a new
+  supervisor yet; the TUI reports DISCONNECTED and blocks writes until a supervisor is
+  started manually.
 - Windows Named Pipe/SID ACL and cross-user denial are missing.
 - Payload fuzzing, secret-in-log tests and route-replacement tests are not added.
 - TUI-internal Disable (Phase 3C.6) still requires real manual acceptance.

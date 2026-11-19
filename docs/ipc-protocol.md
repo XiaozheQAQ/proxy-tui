@@ -12,6 +12,10 @@ AF_UNIX). Each message has a 4-byte big-endian length prefix; maximum message si
 - Version mismatch returns `PROTOCOL_VERSION_MISMATCH`.
 - Calls have deadlines; the server applies a 30s handler timeout.
 - Clients serialize calls per connection; the server serializes mutations with a mutex.
+- Mutation requests may carry `operation_id`. The supervisor caches the result for five
+  minutes (bounded to 256 entries) and returns it for a duplicate ID, so retries after a
+  lost response do not execute the mutation again. The remote client reuses the same ID
+  across reconnects.
 
 ## Operations
 

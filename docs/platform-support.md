@@ -74,6 +74,8 @@ result.
 | Named Pipe / SID ACL | **not implemented** | n/a | n/a |
 | Single instance | atomic socket bind | atomic socket bind | atomic socket bind |
 | Peer authentication | no (AF_UNIX) | yes (SO_PEERCRED) | yes (LOCAL_PEERCRED) |
+| Shared settings writes | supervisor IPC | supervisor IPC | supervisor IPC |
+| Operation dedupe / reconnect | yes / bounded retransport | yes / bounded | yes / bounded |
 | TUI/CLI over IPC | yes (AF_UNIX, Windows verified) | yes (compiled, not live-run) | yes (compiled, not live-run) |
 
 The supervisor and IPC are compiled and unit/integration tested on Windows; Linux/macOS
