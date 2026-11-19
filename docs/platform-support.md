@@ -73,12 +73,13 @@ result.
 | IPC transport | AF_UNIX under LocalAppData (verified) | Unix socket 0600 | Unix socket 0600 |
 | Named Pipe / SID ACL | **not implemented** | n/a | n/a |
 | Single instance | atomic socket bind | atomic socket bind | atomic socket bind |
-| Token/peer authentication | not implemented | not implemented | not implemented |
-| TUI over IPC | not implemented | not implemented | not implemented |
+| Peer authentication | no (AF_UNIX) | yes (SO_PEERCRED) | yes (LOCAL_PEERCRED) |
+| TUI/CLI over IPC | yes (AF_UNIX, Windows verified) | yes (compiled, not live-run) | yes (compiled, not live-run) |
 
 The supervisor and IPC are compiled and unit/integration tested on Windows; Linux/macOS
-builds pass, but the transport has not been run on those hosts. Named Pipe ACL hardening
-is required before claiming the full Windows security model.
+builds pass, but the transport has not been run on those hosts. Linux/macOS peer credential
+checks are implemented; Windows AF_UNIX has no peer credentials, so Named Pipe ACL hardening
+is still required before claiming the full Windows security model.
 
 ## Proxy selection support
 

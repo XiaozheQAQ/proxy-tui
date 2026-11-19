@@ -1,52 +1,76 @@
 # Phase 3D — Supervisor & IPC
 
-Status: **3D.1 implemented; 3D.2 implemented for the supervisor/CLI control path, TUI
-migration pending. 3D.3 and 3D.4 not started.**
+Status: **3D.1 implemented; 3D.2 client migration implemented, but not COMPLETE because
+Windows IPC authentication (Named Pipe/SID ACL) and multi-TUI live validation are still
+outstanding. 3D.3/3D.4 not started.**
 
-## Delivered
+## Architecture now
 
-- `internal/ipc`: versioned JSON-RPC, 4-byte length framing, 1 MiB message cap, request IDs,
-  per-call deadlines, standardized errors, client/server over a user-local Unix socket.
-- `internal/supervisor`: detached per-user supervisor with a real `app.App` backend, single
-  instance enforced by atomic socket bind, `supervisor-state.json`, supervisor log,
-  status/stop, core start/stop/restart, proxies list/select, network status, log tail.
-- `proxy supervisor start|status|stop|logs` and hidden `supervisor run`.
-- `proxy core start|stop` use the supervisor when it is running; a running supervisor is
-  authoritative and errors are not silently retried locally.
-- Idempotency: start of a running core → `CORE_ALREADY_RUNNING`; stop of a stopped core
-  succeeds with `already`; mutations are serialized by one supervisor mutex.
-- Stop is refused while a core runs, TUN is enabled, or ProxyTUI still owns the desktop
-  proxy.
+    TUI / CLI
+       │  app.Frontend (same fields/methods as before)
+       ▼
+    Remote frontend (IPC client)
+       │  app.call / core.* / supervisor.*
+       ▼
+    Supervisor (single instance)
+       │
+       ▼
+    Local App (Cores, Network, TUN, Profiles, Logs)
+
+- `internal/app/frontend.go` defines `CoreService`, `ProfileService`, `TUNService`,
+  `LogService` and the `Frontend` façade used by both clients.
+- `NewLocalFrontend` is only constructed by the supervisor; `NewRemote` is used by TUI/CLI.
+- TUI no longer constructs `app.App`; it receives `*app.Frontend` from `runTUI`.
+- CLI `openApp` always ensures and connects to the supervisor. The only local path is an
+  in-package test flag, not an environment variable or CLI flag.
+- A supervisor facade call is reflection-dispatched over `app.call` with the Facade as the
+  only reachable target; mutation methods are serialized by the supervisor mutex.
+- The TUI shows `Supervisor CONNECTED/DISCONNECTED` on Overview and blocks mutations while
+  disconnected. The refresh loop calls `Health` and clears live state on failure instead of
+  showing stale data as current.
 
 ## Real verification
 
-- Eight parallel `core start mihomo` clients against one supervisor: exactly 1 started,
-  7 `CORE_ALREADY_RUNNING`, exactly one mihomo process.
-- `supervisor stop` with a running core was refused with `NETWORK_BLOCKED`.
-- Supervisor survived all client exits; closing clients did not stop it.
-- `supervisor status` reports pid, endpoint, protocol, version and per-core state.
-- Unit tests: framing, oversize rejection, single instance, concurrent start, stop guards,
-  protocol-version mismatch; `go test -race` clean for ipc/supervisor.
+- Eight concurrent `core start mihomo` clients → exactly one start, seven
+  `CORE_ALREADY_RUNNING`, one mihomo process.
+- Remote frontend live test: IPC → supervisor → activate profile → start core → status →
+  stop core; PASS.
+- Bare `proxy status` with no supervisor auto-started exactly one supervisor; five
+  concurrent `proxy status` clients shared it.
+- TUI process started through `RemoteAppClient`, was killed, and the supervisor survived.
+- `supervisor stop` took 169 ms with no cores/TUN; state and socket removed.
+- `supervisor stop` with a running core is refused with `NETWORK_BLOCKED`.
+- Facade mutation calls are serialized (test), unknown methods are rejected.
+- `go test -race` clean for ipc/supervisor.
 
-## Not delivered yet
+## Security status
 
-- The TUI still creates its own `app.App` and manages cores/TUN locally. It does not connect
-  to the supervisor, so "all TUI mutations go through one writer" is **not met**. Multiple
-  TUIs can still issue conflicting mutations.
-- Bare `proxy` does not auto-start the supervisor; `supervisor start` is explicit.
-- Windows uses AF_UNIX under the user's LocalAppData (verified on Windows 10+). A Named Pipe
-  with an explicit SID ACL is **not** implemented; current protection is the per-user
-  directory/socket location.
-- No token or peer-credential authentication; no adversarial cross-user test.
-- No health monitor, auto-restart/backoff, autostart, log rotation or event subscription
-  (3D.3/3D.4).
-- No TUI supervisor indicator, reconnect logic or disable-on-disconnect.
+| Platform | Transport | Peer authentication | Real verification |
+|---|---|---|---|
+| Linux | Unix socket 0600, dir 0700 | `SO_PEERCRED` UID check | compiled and unit-tested; not run on a native Linux host this round |
+| macOS | Unix socket 0600, dir 0700 | `LOCAL_PEERCRED` UID check | cross-compiled; not run |
+| Windows | AF_UNIX under LocalAppData | **none**; no Named Pipe/SID ACL | run on Windows; relies on per-user profile ACL |
+
+No TCP endpoint is exposed. There is no token; Unix relies on peer credentials, Windows on
+directory ownership. Cross-user adversarial tests have not been run. Windows Named Pipe with
+an explicit SID ACL remains required before claiming Windows IPC security.
+
+## Remaining gaps (not COMPLETE)
+
+- TUI/CLI are migrated in code, but multi-TUI live mutation tests (two TUI processes +
+  concurrent node/Traffic Mode changes) were not performed with an interactive TUI.
+- No automatic IPC reconnect/backoff after a disconnect; the next refresh only reports
+  DISCONNECTED and blocks writes.
+- Windows Named Pipe/SID ACL and cross-user denial are missing.
+- Payload fuzzing, secret-in-log tests and route-replacement tests are not added.
+- TUI-internal Disable (Phase 3C.6) still requires real manual acceptance.
+- 3D.3 health monitor/auto-restart and 3D.4 autostart are not started.
 
 ## Stages
 
 | Stage | State |
 |---|---|
-| 3D.1 Supervisor lifecycle, single instance, detached process, state, CLI | implemented except TUI auto-start |
-| 3D.2 Protocol, client/server, serialization, idempotency, multi-client CLI | implemented; TUI migration missing |
+| 3D.1 Supervisor lifecycle, single instance, detached process, state, CLI | implemented |
+| 3D.2 TUI/CLI client migration, auto-ensure, serialization, no local fallback | implemented; security/live gaps above |
 | 3D.3 Health monitor and recovery | not started |
 | 3D.4 Autostart | not started |

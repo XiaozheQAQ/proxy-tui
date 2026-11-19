@@ -218,10 +218,10 @@ single-instance socket bind, persisted state, supervisor log, versioned framed J
 status/stop, serialized core lifecycle, idempotency and stop guards. Eight concurrent
 clients produced exactly one core start.
 
-Still open: the TUI has not been migrated to IPC (multi-TUI single-writer is not achieved),
-bare `proxy` does not auto-start the supervisor, Windows Named Pipe ACL/token auth are not
-implemented, and 3D.3/3D.4 (health monitor, backoff, autostart) are not started. See
-`docs/phase3d.md`.
+TUI and CLI now use a remote `app.Frontend` through IPC; bare `proxy` and CLI commands
+ensure the supervisor, and the production paths have no local fallback. Unix peers are
+checked by UID; Windows AF_UNIX still lacks Named Pipe/SID ACL enforcement. Reconnect,
+multi-TUI live mutation tests, 3D.3 and 3D.4 remain open. See `docs/phase3d.md`.
 
 Today cores are children of the `proxy` process. A started core keeps running when the TUI
 exits and a later process can adopt it through `<core>-state.json`. That is **cross-session

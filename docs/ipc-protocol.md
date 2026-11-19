@@ -28,6 +28,7 @@ AF_UNIX). Each message has a 4-byte big-endian length prefix; maximum message si
 | `proxy.select` | `{"core","group","name"}` | serialized; core must be running |
 | `network.status` | — | read-only |
 | `logs.tail` | `{"limit":200}` | application logs |
+| `app.call` | `{"method":"CoreProxies","args":[...]}` | dispatches only Facade methods |
 
 Errors: `SUPERVISOR_UNAVAILABLE`, `PROTOCOL_VERSION_MISMATCH`, `UNAUTHORIZED`,
 `CORE_ALREADY_RUNNING`, `CORE_NOT_RUNNING`, `CORE_IDENTITY_MISMATCH`,
@@ -37,5 +38,7 @@ Errors: `SUPERVISOR_UNAVAILABLE`, `PROTOCOL_VERSION_MISMATCH`, `UNAUTHORIZED`,
 ## Security limitations
 
 The endpoint is a socket in the user runtime directory with mode 0600 (Unix) and inherits
-the per-user LocalAppData profile on Windows. There is no token or peer-credential
-handshake and no Windows Named Pipe SID ACL yet. Never expose it over TCP.
+the per-user LocalAppData profile on Windows. Linux verifies `SO_PEERCRED` UID and macOS
+verifies `LOCAL_PEERCRED` UID before serving a connection. Windows AF_UNIX has no peer
+credentials in this implementation and no Named Pipe SID ACL yet; it relies on the per-user
+directory. There is no token. Never expose the endpoint over TCP.

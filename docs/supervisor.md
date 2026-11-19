@@ -27,5 +27,11 @@ Log: `state/logs/supervisor.log`.
 
 ## Integration boundary
 
-CLI `core start|stop` call the supervisor when it is running. The TUI still uses a local
-application instance, so this is not yet universal single-writer. See `docs/phase3d.md`.
+TUI and CLI both connect through the supervisor. `openApp` ensures the supervisor, dials the
+local socket and constructs a remote `app.Frontend`; the local application is built only
+inside the supervisor. A test-only in-package flag exists for unit tests and is not reachable
+from the environment or CLI.
+
+The TUI Overview shows `Supervisor CONNECTED/DISCONNECTED` and blocks mutations while
+disconnected. There is no automatic reconnect/backoff yet; a later refresh reports the
+disconnect. See `docs/phase3d.md` for the remaining security and validation gaps.

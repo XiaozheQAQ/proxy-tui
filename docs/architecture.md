@@ -82,8 +82,11 @@ detached, binds a user-local socket atomically, writes `supervisor-state.json` a
 versioned length-framed JSON. Mutations are serialized by a supervisor mutex; reads may
 run concurrently. CLI core lifecycle calls use IPC when the supervisor is running.
 
-Not yet migrated: the TUI still constructs its own `app.App` and talks to cores directly;
-therefore the single-writer guarantee currently covers CLI lifecycle calls only.
+TUI and CLI construct an `app.Frontend` backed by `NewRemote`; the local application is
+built only inside the supervisor. CLI commands call `ensureSupervisor` before opening the
+frontend. Overview shows `Supervisor CONNECTED/DISCONNECTED` and mutations are blocked while
+disconnected. The supervisor mutex serializes both dedicated core operations and facade
+mutation calls (`app.call`).
 
 ## Data flow: proxy browsing, selection and connectivity
 
