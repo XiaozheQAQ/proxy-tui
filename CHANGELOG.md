@@ -52,6 +52,10 @@ Phase 3A/3B/3C: transactional network state, desktop system proxy and core-nativ
     configuration is labelled, and core identity now also includes the binary SHA-256.
   * `network tun preflight` exits 0 when the inspection completed; activation remains the
     job of `network tun enable`.
+  * Phase 3D.2.5 closure audit: stop intent persisted before shutdown (stop refused if the
+    write fails), lifecycle instance metadata, IPC framing/JSON fuzz targets (8s each, no
+    crash), and a Phase 3C.6 TUI Disable manual acceptance guide. TUI Disable and native
+    CI remain NOT TESTED / NOT RUN.
   * Phase 3D.2.4 coordination: persisted supervisor lifecycle (RUNNING vs
     INTENTIONALLY_STOPPED), crash-triggered Ensure serialized by a cross-process lock,
     remote auto-ensure hook, Unix client-side peer/socket verification, and native Unix

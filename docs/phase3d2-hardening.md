@@ -47,6 +47,18 @@ authentication, FakeCore adoption and interactive two-TUI coordination remain NO
 - Two TUI processes were started simultaneously; killing one left the other and the
   supervisor running. Interactive shared-state/node coordination is NOT TESTED.
 
+## Round 3 additions
+
+- Stop intent is persisted before acknowledgement/cancel. A failed persistence refuses the
+  stop (`TestStopRefusedWhenIntentCannotPersist`); the lifecycle record is already
+  `INTENTIONALLY_STOPPED` when the stop response returns
+  (`TestStopIntentPersistedBeforeShutdown`). Instance ID/version/source were added.
+- Fuzz targets for framing and request JSON were added and run locally for 8s each
+  (7.3M/7.1M executions, no crash).
+- Endpoint replacement tests exist for Unix (symlink, permissions, stale socket) and
+  Windows (pipe-name conflict).
+- `docs/manual-acceptance-phase3c6.md` prepared. TUI Disable remains **NOT TESTED**.
+
 ## Remaining
 
 - Real cross-SID denial test (controlled second account or CI runner).

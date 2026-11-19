@@ -129,7 +129,9 @@ result without re-executing. The client retries transport failures with bounded 
 Windows uses a go-winio Named Pipe with a Logon-SID DACL and remote clients rejected;
 cross-SID denial is not yet tested. Supervisor lifecycle state distinguishes a user stop
 from a crash, and concurrent Ensure is serialized. Interactive multi-TUI coordination,
-FakeCore crash adoption, health monitoring and autostart remain open. See
+FakeCore crash adoption, interactive TUI coordination, health monitoring and autostart
+remain open. TUI TUN Disable manual acceptance is still NOT TESTED; see
+`docs/manual-acceptance-phase3c6.md`. See
 `docs/phase3d.md`, `docs/ipc-security.md` and `docs/operation-lifecycle.md`.
 
 ## Traffic takeover

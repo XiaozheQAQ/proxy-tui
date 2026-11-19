@@ -5,8 +5,13 @@
 - `supervisor-state.json`: live PID/endpoint/version while the supervisor runs.
 - `supervisor-lifecycle.json`: `RUNNING` or `INTENTIONALLY_STOPPED`.
 
-A graceful `proxy supervisor stop` writes `INTENTIONALLY_STOPPED`. A crash or external
-kill leaves the last `RUNNING` record behind.
+A `proxy supervisor stop` request first persists `INTENTIONALLY_STOPPED` (with instance ID,
+PID, start time, version and source `supervisor.stop`) before acknowledging or cancelling
+the server. If that write fails, stop is refused with an error and the supervisor keeps
+running. A crash or external kill therefore leaves the last `RUNNING` record behind.
+
+The record carries `version`, `instance_id`, `status`, `pid`, `started_at`, `updated_at` and
+`source`. It is written atomically.
 
 ## Client behavior
 
