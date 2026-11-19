@@ -152,7 +152,7 @@ func dialSupervisor(ctx context.Context) (*ipc.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	client, err := ipc.Dial(ctx, ipc.EndpointPath(paths.RuntimeDir()), 5*time.Second)
+	client, err := ipc.Dial(ctx, ipc.EndpointPath(paths.RuntimeDir()), 30*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("supervisor unavailable: %w (run: proxy supervisor start)", err)
 	}

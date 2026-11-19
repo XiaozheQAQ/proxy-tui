@@ -134,6 +134,7 @@ type OverviewData struct {
 	ProxiesErr     string
 	SystemProxy    FeatureState
 	TUN            FeatureState
+	Supervisor     string
 	TrafficMode    string
 	ProxyCheck     ProxyCheck
 	LastError      string

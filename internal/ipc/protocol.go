@@ -29,6 +29,7 @@ const (
 	OpNetworkStatus     = "network.status"
 	OpLogsTail          = "logs.tail"
 	OpSupervisorLogTail = "supervisor.logs"
+	OpAppCall           = "app.call"
 )
 
 // Error codes shared by the supervisor and clients.

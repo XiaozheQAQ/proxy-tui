@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/proxytui/proxy-tui/internal/app"
 	"github.com/proxytui/proxy-tui/internal/core"
 	"github.com/proxytui/proxy-tui/internal/ipc"
 	"github.com/proxytui/proxy-tui/internal/logging"
@@ -95,6 +96,8 @@ func (h *handler) handle(ctx context.Context, request ipc.Request) ipc.Response 
 		return okResponse(request, NetworkPayload{Report: report})
 	case ipc.OpLogsTail, ipc.OpSupervisorLogTail:
 		return h.logs(ctx, request)
+	case ipc.OpAppCall:
+		return h.appCall(ctx, request)
 	default:
 		return failResponse(request, ipc.CodeUnsupported, "unknown operation "+request.Operation)
 	}
@@ -230,6 +233,36 @@ func (h *handler) selectProxy(ctx context.Context, request ipc.Request) ipc.Resp
 		return failResponse(request, ipc.CodeInternal, err.Error())
 	}
 	return okResponse(request, CoreAction{Core: kind, State: "selected"})
+}
+
+func (h *handler) appCall(ctx context.Context, request ipc.Request) ipc.Response {
+	var payload app.AppCallPayload
+	if err := decode(request, &payload); err != nil {
+		return failResponse(request, ipc.CodeBadRequest, err.Error())
+	}
+	target := h.backend.Callable()
+	if target == nil {
+		return failResponse(request, ipc.CodeUnsupported, "frontend calls are not available")
+	}
+	if isFacadeMutation(payload.Method) {
+		h.mutation.Lock()
+		defer h.mutation.Unlock()
+	}
+	result, err := invokeFacade(ctx, target, payload.Method, payload.Args)
+	if err != nil {
+		return failResponse(request, ipc.CodeInternal, err.Error())
+	}
+	return okResponse(request, result)
+}
+
+func isFacadeMutation(method string) bool {
+	switch method {
+	case "CoreInstall", "CoreStart", "CoreStop", "CoreRestart", "CoreSelect",
+		"SubsSetActive", "SubsDelete", "SubsUpdate", "SubsUpdateAll", "SubsSetDefaultInterval",
+		"LogsClear", "Import", "ApplyTrafficMode", "RecoverTUN", "RecoverNetwork", "TUNDisable":
+		return true
+	}
+	return false
 }
 
 func (h *handler) logs(ctx context.Context, request ipc.Request) ipc.Response {

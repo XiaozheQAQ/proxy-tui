@@ -26,7 +26,7 @@ const tickInterval = time.Second
 
 // Model is the root Bubble Tea model.
 type Model struct {
-	app *app.App
+	app *app.Frontend
 
 	width, height int
 	ready         bool
@@ -36,12 +36,13 @@ type Model struct {
 	core     model.CoreKind
 	pages    map[pages.ID]pages.Page
 
-	profiles     []model.Profile
-	statuses     map[model.CoreKind]core.Status
-	live         liveState
-	network      network.Report
-	tun          tun.Status
-	connectivity app.ProxyConnectivity
+	profiles      []model.Profile
+	statuses      map[model.CoreKind]core.Status
+	live          liveState
+	network       network.Report
+	tun           tun.Status
+	connectivity  app.ProxyConnectivity
+	supervisorErr string
 
 	settings storage.Settings
 
@@ -74,7 +75,7 @@ type liveState struct {
 }
 
 // New builds the root model.
-func New(application *app.App) *Model {
+func New(application *app.Frontend) *Model {
 	m := &Model{
 		app:      application,
 		page:     pages.IDOverview,
@@ -162,7 +163,8 @@ func (m *Model) rebuildData() {
 			LatencyMS: m.connectivity.LatencyMS,
 			Err:       m.connectivity.Err,
 		},
-		Proxies: m.liveProxies(),
+		Proxies:    m.liveProxies(),
+		Supervisor: m.supervisorLabel(),
 	}
 	if !status.Running {
 		overview.Proxies = nil
@@ -253,6 +255,13 @@ func (m *Model) statusOf(kind model.CoreKind) core.Status {
 	return core.Status{Core: kind}
 }
 
+func (m *Model) supervisorLabel() string {
+	if m.supervisorErr != "" {
+		return "DISCONNECTED — " + m.supervisorErr
+	}
+	return "CONNECTED"
+}
+
 func (m *Model) trafficModeLabel() string {
 	if m.tun.Enabled {
 		detail := "TUN"
@@ -334,6 +343,12 @@ func (m *Model) refreshCmd() tea.Cmd {
 			profiles: application.Subs.List(),
 			logs:     application.Logs.Tail(800),
 		}
+		if err := application.Health(ctx); err != nil {
+			msg.supervisorErr = err.Error()
+			msg.profiles = nil
+			msg.logs = nil
+			return msg
+		}
 		if report, err := application.NetworkReport(ctx); err != nil {
 			msg.networkErr = err.Error()
 		} else {
@@ -370,13 +385,14 @@ func (m *Model) refreshCmd() tea.Cmd {
 
 // refreshMsg is the result of refreshCmd.
 type refreshMsg struct {
-	statuses   map[model.CoreKind]core.Status
-	profiles   []model.Profile
-	logs       []logging.Entry
-	live       liveState
-	network    network.Report
-	networkErr string
-	tun        tun.Status
+	statuses      map[model.CoreKind]core.Status
+	profiles      []model.Profile
+	logs          []logging.Entry
+	live          liveState
+	network       network.Report
+	supervisorErr string
+	networkErr    string
+	tun           tun.Status
 }
 
 // notice sets the transient footer message.

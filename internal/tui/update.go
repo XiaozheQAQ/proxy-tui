@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/proxytui/proxy-tui/internal/core"
 	"sync"
 	"time"
 
@@ -87,6 +89,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case refreshMsg:
+		m.supervisorErr = typed.supervisorErr
+		if typed.supervisorErr != "" {
+			m.statuses = map[model.CoreKind]core.Status{}
+			m.profiles = nil
+			m.live = liveState{}
+			m.tun = tun.Status{}
+			m.network = network.Report{
+				Capabilities: network.Capabilities{Supported: false, Reason: "supervisor disconnected"},
+			}
+			m.rebuildData()
+			return m, nil
+		}
 		m.statuses = typed.statuses
 		m.profiles = typed.profiles
 		m.live = typed.live
@@ -381,6 +395,10 @@ func (m *Model) updateDialog(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) dispatch(action pages.Action) tea.Cmd {
+	if m.supervisorErr != "" && mutationAction(action.Kind) {
+		m.notice("error", "supervisor disconnected: %s", m.supervisorErr)
+		return nil
+	}
 	switch action.Kind {
 	case pages.ActionQuit:
 		return tea.Quit
@@ -964,6 +982,20 @@ func (m *Model) effectiveTrafficMode() network.Mode {
 		return network.ModeSystemProxy
 	}
 	return network.Mode(m.settings.TrafficMode)
+}
+
+func mutationAction(kind pages.ActionKind) bool {
+	switch kind {
+	case pages.ActionUseProfile, pages.ActionUpdateProfile, pages.ActionDeleteProfile,
+		pages.ActionStartCore, pages.ActionStopCore, pages.ActionRestartCore,
+		pages.ActionProxyPicker, pages.ActionTestProxies, pages.ActionSelectProxy,
+		pages.ActionToggleSystemProxy, pages.ActionToggleTUN, pages.ActionSetTrafficMode,
+		pages.ActionCycleTunStack, pages.ActionCycleTunMTU, pages.ActionToggleTunDNS,
+		pages.ActionToggleTunIPv6, pages.ActionRunTUNPreflight, pages.ActionRecoverTUN,
+		pages.ActionAddProfile, pages.ActionVerifyProxy:
+		return true
+	}
+	return false
 }
 
 func (m *Model) requestTrafficMode(mode network.Mode) tea.Cmd {

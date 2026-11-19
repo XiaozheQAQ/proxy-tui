@@ -194,7 +194,7 @@ func emptyOr(value, fallback string) string {
 	return value
 }
 
-func appTunSettings(application *app.App) tun.Settings {
+func appTunSettings(application *app.Frontend) tun.Settings {
 	return app.TunSettingsFrom(application.Settings)
 }
 
@@ -414,7 +414,7 @@ func runTUNRecover(cmd *cobra.Command) error {
 	return nil
 }
 
-func tunSettingsFromFlags(cmd *cobra.Command, application *app.App) (model.CoreKind, tun.Settings, error) {
+func tunSettingsFromFlags(cmd *cobra.Command, application *app.Frontend) (model.CoreKind, tun.Settings, error) {
 	settings := app.TunSettingsFrom(application.Settings)
 	kind := application.DefaultTunCore(context.Background())
 	if raw, err := cmd.Flags().GetString("core"); err == nil && strings.TrimSpace(raw) != "" {
@@ -449,7 +449,7 @@ func tunSettingsFromFlags(cmd *cobra.Command, application *app.App) (model.CoreK
 	return kind, settings, nil
 }
 
-func saveTunConfig(application *app.App, kind model.CoreKind, settings tun.Settings) error {
+func saveTunConfig(application *app.Frontend, kind model.CoreKind, settings tun.Settings) error {
 	current, err := storage.LoadSettings(application.Paths)
 	if err != nil {
 		return err

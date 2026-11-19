@@ -115,6 +115,7 @@ func (p *Overview) coreBody(theme layout.Theme, width int) string {
 		{"State", components.Badge(theme, status.Label(), tone)},
 		{"Version", dash(status.Version)},
 		{"Profiles", fmt.Sprintf("%d", p.data.ProfileCount)},
+		{"Supervisor", p.data.Supervisor},
 		{"Traffic mode", p.data.TrafficMode},
 		{"Proxy check", proxyCheckLabel(p.data.ProxyCheck)},
 		{"Desktop proxy", desktop},

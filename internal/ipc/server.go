@@ -48,6 +48,10 @@ func (s *Server) Serve(ctx context.Context) error {
 			}
 			return err
 		}
+		if err := verifyPeer(conn); err != nil {
+			_ = conn.Close()
+			continue
+		}
 		s.mu.Lock()
 		s.conns[conn] = struct{}{}
 		s.mu.Unlock()

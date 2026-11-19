@@ -22,17 +22,21 @@ type Backend interface {
 	NetworkReport(ctx context.Context) (network.Report, error)
 	TUNStatus(ctx context.Context) (tun.Status, error)
 	LogsTail(n int) []logging.Entry
+	Callable() any
 }
 
 // AppBackend adapts the application layer.
 type AppBackend struct {
-	app *app.App
+	app    *app.App
+	facade *app.Facade
 }
 
 // NewAppBackend wraps an App.
 func NewAppBackend(application *app.App) *AppBackend {
-	return &AppBackend{app: application}
+	return &AppBackend{app: application, facade: app.NewFacade(application)}
 }
+
+func (b *AppBackend) Callable() any { return b.facade }
 
 func (b *AppBackend) Statuses(ctx context.Context) map[model.CoreKind]core.Status {
 	out := map[model.CoreKind]core.Status{}

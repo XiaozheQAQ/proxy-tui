@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -47,20 +48,45 @@ Run "proxy" without arguments to open the TUI.`),
 	return root
 }
 
-func openApp() (*app.App, error) {
+// localFrontendForTests is set only by in-package unit tests. It is not
+// reachable from the environment or from command-line flags.
+var localFrontendForTests bool
+
+// openApp returns a supervisor-backed frontend. Production commands never fall
+// back to a local core manager.
+func openApp() (*app.Frontend, error) {
 	paths, err := storage.DefaultPaths()
 	if err != nil {
 		return nil, err
 	}
-	return app.New(paths)
+	if localFrontendForTests {
+		local, err := app.New(paths)
+		if err != nil {
+			return nil, err
+		}
+		return app.NewLocalFrontend(local), nil
+	}
+	if _, _, err := ensureSupervisor(context.Background()); err != nil {
+		return nil, err
+	}
+	client, err := dialSupervisor(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	frontend, err := app.NewRemote(context.Background(), client)
+	if err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	return frontend, nil
 }
 
 func runTUI() error {
-	application, err := openApp()
+	frontend, err := openApp()
 	if err != nil {
 		return err
 	}
-	model := tui.New(application)
+	model := tui.New(frontend)
 	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err = program.Run()
 	return err
