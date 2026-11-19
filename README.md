@@ -126,9 +126,10 @@ bare `proxy` ensures the supervisor and no production command falls back to a lo
 manager. Shared settings writes go through `UpdateSettings`, mutation requests use
 OperationIDs with supervisor-side deduplication, and `proxy operation status <id>` queries a
 result without re-executing. The client retries transport failures with bounded backoff.
-Windows now uses a go-winio Named Pipe with a Logon-SID DACL and remote clients rejected;
-cross-SID denial is not yet tested. Supervisor auto-restart after a process exit, multi-TUI
-live validation, health monitoring and autostart are not implemented. See
+Windows uses a go-winio Named Pipe with a Logon-SID DACL and remote clients rejected;
+cross-SID denial is not yet tested. Supervisor lifecycle state distinguishes a user stop
+from a crash, and concurrent Ensure is serialized. Interactive multi-TUI coordination,
+FakeCore crash adoption, health monitoring and autostart remain open. See
 `docs/phase3d.md`, `docs/ipc-security.md` and `docs/operation-lifecycle.md`.
 
 ## Traffic takeover

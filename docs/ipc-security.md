@@ -27,6 +27,9 @@
 
 ## Unix
 
-- Socket mode 0600, parent directory 0700.
+- Socket mode 0600, parent directory 0700, owner checked; symlink/non-socket endpoints are
+  rejected. Stale sockets are removed only after a failed dial and an ownership check.
 - Linux verifies `SO_PEERCRED` UID; macOS verifies `LOCAL_PEERCRED` UID before serving.
-- Native integration tests on real Linux/macOS were **NOT RUN** this round.
+- The client verifies the server peer UID and the socket/owner/permissions before use.
+- Tests for round trip, 32 clients, permissions, symlink and stale sockets were added for
+  native Linux/macOS. Native execution and CI are **NOT RUN** in this environment.

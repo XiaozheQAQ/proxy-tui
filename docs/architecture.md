@@ -85,7 +85,9 @@ run concurrently. CLI core lifecycle calls use IPC when the supervisor is runnin
 
 TUI and CLI construct an `app.Frontend` backed by `NewRemote`; the local application is
 built only inside the supervisor. CLI commands call `ensureSupervisor` before opening the
-frontend. Overview shows `Supervisor CONNECTED/DISCONNECTED` and mutations are blocked while
+frontend. The supervisor persists `RUNNING`/`INTENTIONALLY_STOPPED` lifecycle state so a
+user stop is not undone by a later client, while a crash allows a single locked Ensure.
+Overview shows `Supervisor CONNECTED/DISCONNECTED` and mutations are blocked while
 disconnected. The supervisor mutex serializes both dedicated core operations and facade
 mutation calls (`app.call`).
 
