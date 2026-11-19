@@ -11,6 +11,7 @@ import (
 )
 
 // EndpointPath returns the local socket path inside the runtime directory.
+// Windows uses AF_UNIX here; Named Pipe with a SID DACL is not implemented yet.
 func EndpointPath(runtimeDir string) string {
 	return filepath.Join(runtimeDir, "supervisor.sock")
 }

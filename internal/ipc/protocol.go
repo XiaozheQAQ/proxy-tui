@@ -30,6 +30,7 @@ const (
 	OpLogsTail          = "logs.tail"
 	OpSupervisorLogTail = "supervisor.logs"
 	OpAppCall           = "app.call"
+	OpOperationGet      = "operation.get"
 )
 
 // Error codes shared by the supervisor and clients.

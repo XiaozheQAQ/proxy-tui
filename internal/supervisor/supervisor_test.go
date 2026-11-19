@@ -321,6 +321,13 @@ func TestOperationIDDeduplicates(t *testing.T) {
 	if got := atomic.LoadInt32(&facade.calls); got != 1 {
 		t.Fatalf("duplicate operation executed %d times", got)
 	}
+	var status OperationStatusPayload
+	if err := client.Call(context.Background(), ipc.OpOperationGet, map[string]string{"operation_id": "op-1"}, &status); err != nil {
+		t.Fatalf("operation.get: %v", err)
+	}
+	if status.Status != "SUCCEEDED" {
+		t.Fatalf("operation status = %q", status.Status)
+	}
 	call("op-2")
 	if got := atomic.LoadInt32(&facade.calls); got != 2 {
 		t.Fatalf("distinct operation executed %d times", got)

@@ -68,6 +68,16 @@ type cacheEntry struct {
 	operation string
 	response  ipc.Response
 	storedAt  time.Time
+	running   bool
+}
+
+// OperationStatusPayload reports the lifecycle of one mutation.
+type OperationStatusPayload struct {
+	OperationID string          `json:"operation_id"`
+	Status      string          `json:"status"`
+	Error       *ipc.RPCError   `json:"error,omitempty"`
+	Payload     json.RawMessage `json:"payload,omitempty"`
+	StoredAt    time.Time       `json:"stored_at,omitempty"`
 }
 
 const (
@@ -90,12 +100,52 @@ func NewHandler(backend Backend, endpoint, version, logPath string, cancel conte
 }
 
 func (h *handler) handle(ctx context.Context, request ipc.Request) ipc.Response {
+	if request.Operation == ipc.OpOperationGet {
+		return h.operationStatus(request)
+	}
 	if cached, ok := h.lookupOperation(request); ok {
 		return cached
+	}
+	if request.OperationID != "" && h.isMutationRequest(request) {
+		h.markRunning(request)
 	}
 	response := h.dispatch(ctx, request)
 	h.storeOperation(request, response)
 	return response
+}
+
+func (h *handler) operationStatus(request ipc.Request) ipc.Response {
+	var payload struct {
+		OperationID string `json:"operation_id"`
+	}
+	if err := decode(request, &payload); err != nil || payload.OperationID == "" {
+		return failResponse(request, ipc.CodeBadRequest, "operation_id is required")
+	}
+	h.cacheMu.Lock()
+	entry, ok := h.cache[payload.OperationID]
+	expired := ok && time.Since(entry.storedAt) > operationCacheTTL
+	h.cacheMu.Unlock()
+	status := "UNKNOWN"
+	result := OperationStatusPayload{OperationID: payload.OperationID}
+	switch {
+	case !ok:
+		status = "UNKNOWN"
+	case expired:
+		status = "EXPIRED"
+	case entry.running:
+		status = "RUNNING"
+	case entry.response.Success:
+		status = "SUCCEEDED"
+		result.Payload = entry.response.Payload
+	case entry.response.Error != nil:
+		status = "FAILED"
+		result.Error = entry.response.Error
+	}
+	result.Status = status
+	if ok {
+		result.StoredAt = entry.storedAt
+	}
+	return okResponse(request, result)
 }
 
 func (h *handler) dispatch(ctx context.Context, request ipc.Request) ipc.Response {
@@ -318,9 +368,22 @@ func (h *handler) lookupOperation(request ipc.Request) (ipc.Response, bool) {
 	if !ok || time.Since(entry.storedAt) > operationCacheTTL || entry.operation != request.Operation {
 		return ipc.Response{}, false
 	}
+	if entry.running {
+		return failResponse(request, ipc.CodeOperationInProgress, "operation is still running; query operation.get"), true
+	}
 	cached := entry.response
 	cached.RequestID = request.RequestID
 	return cached, true
+}
+
+func (h *handler) markRunning(request ipc.Request) {
+	h.cacheMu.Lock()
+	defer h.cacheMu.Unlock()
+	h.cache[request.OperationID] = cacheEntry{
+		operation: request.Operation,
+		storedAt:  time.Now(),
+		running:   true,
+	}
 }
 
 func (h *handler) storeOperation(request ipc.Request, response ipc.Response) {
@@ -342,7 +405,7 @@ func (h *handler) storeOperation(request ipc.Request, response ipc.Response) {
 			delete(h.cache, id)
 		}
 	}
-	h.cache[request.OperationID] = cacheEntry{operation: request.Operation, response: response, storedAt: time.Now()}
+	h.cache[request.OperationID] = cacheEntry{operation: request.Operation, response: response, storedAt: time.Now(), running: false}
 }
 
 func (h *handler) isMutationRequest(request ipc.Request) bool {
