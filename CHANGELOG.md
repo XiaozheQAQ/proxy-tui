@@ -52,6 +52,11 @@ Phase 3A/3B/3C: transactional network state, desktop system proxy and core-nativ
     configuration is labelled, and core identity now also includes the binary SHA-256.
   * `network tun preflight` exits 0 when the inspection completed; activation remains the
     job of `network tun enable`.
+  * Phase 3D.1/3D.2 (partial): detached per-user supervisor, atomic single-instance lock,
+    persisted supervisor state/log, versioned length-framed JSON IPC, status/stop, serialized
+    core start/stop/restart, idempotency, stop guards, and CLI lifecycle calls through the
+    supervisor. Adds `proxy supervisor start|status|stop|logs`. TUI IPC migration, Windows
+    Named Pipe ACL, authentication, health monitoring and autostart remain open.
   * Proxy browsing and selection: a real Proxies dialog backed by `/proxies` with
     recursive Selector navigation, automatic-group refusal, DIRECT/REJECT labels, member
     search, per-node delay testing, and post-selection `now` verification. Root groups are

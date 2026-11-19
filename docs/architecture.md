@@ -70,6 +70,21 @@ configs/templates             embedded base configs for node-only subscriptions
    can adopt the running core: status, proxies, traffic and stop all keep working.
 6. The TUI polls traffic and connections once per second through the Clash API.
 
+## Supervisor and IPC (Phase 3D, partial)
+
+    proxy CLI ──► IPC client ──► supervisor (single instance)
+                                   │
+                                   ├── App (profiles, network, cores)
+                                   └── Mihomo / sing-box
+
+The supervisor is the same binary with the hidden `supervisor run` command. It is started
+detached, binds a user-local socket atomically, writes `supervisor-state.json` and serves
+versioned length-framed JSON. Mutations are serialized by a supervisor mutex; reads may
+run concurrently. CLI core lifecycle calls use IPC when the supervisor is running.
+
+Not yet migrated: the TUI still constructs its own `app.App` and talks to cores directly;
+therefore the single-writer guarantee currently covers CLI lifecycle calls only.
+
 ## Data flow: proxy browsing, selection and connectivity
 
 1. The refresh loop calls `Cores.Proxies` for the running core; the Clash API response is

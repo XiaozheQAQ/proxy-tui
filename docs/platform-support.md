@@ -65,6 +65,21 @@ result.
 | WireGuard | `VPN_WIREGUARD` from the WireGuard driver/service; reported as a VPN warning |
 | Unknown identity | `VIRTUAL_UNKNOWN`/`UNKNOWN`; carrying the default route is BLOCKED, idle is UNKNOWN |
 
+## Supervisor and IPC support
+
+| Item | Windows | Linux | macOS |
+|---|---|---|---|
+| Supervisor process | yes (detached, per user) | yes (setsid, per user) | yes (setsid, per user) |
+| IPC transport | AF_UNIX under LocalAppData (verified) | Unix socket 0600 | Unix socket 0600 |
+| Named Pipe / SID ACL | **not implemented** | n/a | n/a |
+| Single instance | atomic socket bind | atomic socket bind | atomic socket bind |
+| Token/peer authentication | not implemented | not implemented | not implemented |
+| TUI over IPC | not implemented | not implemented | not implemented |
+
+The supervisor and IPC are compiled and unit/integration tested on Windows; Linux/macOS
+builds pass, but the transport has not been run on those hosts. Named Pipe ACL hardening
+is required before claiming the full Windows security model.
+
 ## Proxy selection support
 
 | Capability | Mihomo | sing-box |

@@ -103,6 +103,29 @@ After importing a subscription the TUI focuses the core page and suggests the ne
 Enter activates the profile, `s` starts the core, `p` opens the node browser. Import never
 starts a core or enables global takeover by itself.
 
+## Supervisor (Phase 3D.1/3D.2, partial)
+
+ProxyTUI now ships a per-user detached supervisor and a versioned local IPC endpoint:
+
+    proxy supervisor start
+    proxy supervisor status --json
+    proxy supervisor stop
+    proxy supervisor logs
+
+- One instance per user is enforced by an atomic local-socket bind; a live endpoint wins.
+- State is persisted in `state/runtime/supervisor-state.json`; the log is
+  `state/logs/supervisor.log`.
+- `proxy core start|stop` use the supervisor when it is running; a present supervisor is
+  authoritative. A stop is refused while a core, TUN or ProxyTUI-owned desktop proxy is
+  still active.
+- IPC is a local Unix-domain socket (Windows 10+ AF_UNIX) with length-framed JSON,
+  request IDs, deadlines, version checks and serialized mutations. No TCP is exposed.
+
+**Current boundary:** the TUI still uses a local application instance and has not been
+migrated to IPC, so multi-TUI single-writer coordination is not complete yet. Windows
+Named Pipe SID ACL, token authentication, health monitoring, auto-restart and autostart
+are not implemented. See `docs/phase3d.md` and `docs/supervisor.md`.
+
 ## Traffic takeover
 
 Exactly one mode is active at a time; the TUI and CLI share the same state machine.

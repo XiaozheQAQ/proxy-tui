@@ -211,7 +211,17 @@ not elevated and the host already runs another TUN client (`xray_tun`). Enabling
 have changed the machine's routing, which is out of scope for an automated agent without
 explicit approval. `proxy network tun enable` correctly stops at the privilege check.
 
-## 3D — Proxy Supervisor (planned)
+## 3D — Proxy Supervisor (partial)
+
+3D.1 and the CLI/control part of 3D.2 are implemented: detached per-user supervisor,
+single-instance socket bind, persisted state, supervisor log, versioned framed JSON IPC,
+status/stop, serialized core lifecycle, idempotency and stop guards. Eight concurrent
+clients produced exactly one core start.
+
+Still open: the TUI has not been migrated to IPC (multi-TUI single-writer is not achieved),
+bare `proxy` does not auto-start the supervisor, Windows Named Pipe ACL/token auth are not
+implemented, and 3D.3/3D.4 (health monitor, backoff, autostart) are not started. See
+`docs/phase3d.md`.
 
 Today cores are children of the `proxy` process. A started core keeps running when the TUI
 exits and a later process can adopt it through `<core>-state.json`. That is **cross-session
