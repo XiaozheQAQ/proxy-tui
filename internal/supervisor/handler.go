@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/proxytui/proxy-tui/internal/app"
@@ -59,6 +60,7 @@ type handler struct {
 	cancel   context.CancelFunc
 
 	mutation sync.Mutex
+	stopped  atomic.Bool
 
 	cacheMu sync.Mutex
 	cache   map[string]cacheEntry
@@ -86,7 +88,7 @@ const (
 )
 
 // NewHandler builds the RPC handler.
-func NewHandler(backend Backend, endpoint, version, logPath string, cancel context.CancelFunc) ipc.Handler {
+func NewHandler(backend Backend, endpoint, version, logPath string, cancel context.CancelFunc) *handler {
 	h := &handler{
 		backend:  backend,
 		endpoint: endpoint,
@@ -96,7 +98,7 @@ func NewHandler(backend Backend, endpoint, version, logPath string, cancel conte
 		cancel:   cancel,
 		cache:    map[string]cacheEntry{},
 	}
-	return h.handle
+	return h
 }
 
 func (h *handler) handle(ctx context.Context, request ipc.Request) ipc.Response {
@@ -189,6 +191,9 @@ func (h *handler) status(ctx context.Context, request ipc.Request) ipc.Response 
 	})
 }
 
+// Stopped reports whether this supervisor received a graceful stop request.
+func (h *handler) Stopped() bool { return h.stopped.Load() }
+
 func (h *handler) stop(ctx context.Context, request ipc.Request) ipc.Response {
 	h.mutation.Lock()
 	defer h.mutation.Unlock()
@@ -213,6 +218,7 @@ func (h *handler) stop(ctx context.Context, request ipc.Request) ipc.Response {
 	if report.BackupActive {
 		return failResponse(request, ipc.CodeNetworkBlocked, "proxy-tui still owns the desktop proxy; restore it first")
 	}
+	h.stopped.Store(true)
 	go func() {
 		time.Sleep(80 * time.Millisecond)
 		h.cancel()

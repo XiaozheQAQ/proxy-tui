@@ -19,6 +19,13 @@ import (
 	"github.com/proxytui/proxy-tui/internal/supervisor"
 )
 
+func init() {
+	app.EnsureSupervisor = func(ctx context.Context) error {
+		_, _, err := ensureSupervisor(ctx, false)
+		return err
+	}
+}
+
 func newSupervisorCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "supervisor", Short: "Manage the per-user proxy supervisor"}
 	cmd.AddCommand(
@@ -34,7 +41,7 @@ func newSupervisorCommand() *cobra.Command {
 			}},
 		&cobra.Command{Use: "start", Short: "Start the supervisor in the background", Args: cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, args []string) error {
-				endpoint, started, err := ensureSupervisor(cmd.Context())
+				endpoint, started, err := ensureSupervisor(cmd.Context(), true)
 				if err != nil {
 					return err
 				}
@@ -65,6 +72,17 @@ func newSupervisorStatusCommand() *cobra.Command {
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		client, err := dialSupervisor(cmd.Context())
 		if err != nil {
+			paths, pathErr := storage.DefaultPaths()
+			if pathErr == nil {
+				if record, loadErr := supervisor.LoadLifecycle(paths); loadErr == nil && record != nil {
+					if record.Status == supervisor.LifecycleStopped {
+						printLine(cmd.OutOrStdout(), "supervisor: INTENTIONALLY_STOPPED")
+						printLine(cmd.OutOrStdout(), "run 'proxy supervisor start' to start it")
+						return nil
+					}
+					printLine(cmd.OutOrStdout(), "supervisor: NOT RUNNING (last lifecycle %s, pid %d)", record.Status, record.PID)
+				}
+			}
 			return err
 		}
 		defer client.Close()
@@ -189,7 +207,38 @@ func supervisorCoreAction(ctx context.Context, operation string, kind model.Core
 }
 
 // ensureSupervisor starts the detached supervisor when it is not running.
-func ensureSupervisor(ctx context.Context) (string, bool, error) {
+// acquireEnsureLock serializes supervisor creation across processes. While
+// waiting it also watches for another client's supervisor becoming ready.
+func acquireEnsureLock(ctx context.Context, paths storage.Paths, endpoint string) (func(), bool, error) {
+	lockPath := filepath.Join(paths.RuntimeDir(), "ensure.lock")
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			_, _ = fmt.Fprintf(file, "%d\n", os.Getpid())
+			_ = file.Close()
+			return func() { _ = os.Remove(lockPath) }, false, nil
+		}
+		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > 20*time.Second {
+			_ = os.Remove(lockPath)
+			continue
+		}
+		if client, dialErr := ipc.Dial(ctx, endpoint, 300*time.Millisecond); dialErr == nil {
+			_ = client.Close()
+			return nil, true, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, false, fmt.Errorf("another client is starting the supervisor; retry shortly")
+		}
+		select {
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		case <-time.After(150 * time.Millisecond):
+		}
+	}
+}
+
+func ensureSupervisor(ctx context.Context, force bool) (string, bool, error) {
 	paths, err := storage.DefaultPaths()
 	if err != nil {
 		return "", false, err
@@ -204,8 +253,29 @@ func ensureSupervisor(ctx context.Context) (string, bool, error) {
 		_ = client.Close()
 		return endpoint, false, nil
 	}
+	// A user stop is authoritative: ordinary commands must not resurrect the
+	// supervisor. Only an explicit "supervisor start" (force) bypasses it.
+	if record, loadErr := supervisor.LoadLifecycle(paths); loadErr == nil && record != nil {
+		if record.Status == supervisor.LifecycleStopped && !force {
+			return "", false, fmt.Errorf("SUPERVISOR_INTENTIONALLY_STOPPED: run 'proxy supervisor start' to start it")
+		}
+	}
 	if err := paths.Ensure(); err != nil {
 		return "", false, err
+	}
+	release, ready, lockErr := acquireEnsureLock(ctx, paths, endpoint)
+	if lockErr != nil {
+		return "", false, lockErr
+	}
+	if ready {
+		return endpoint, false, nil
+	}
+	defer release()
+	// Another process may have started the supervisor between the first dial
+	// and acquiring the lock.
+	if client, dialErr := ipc.Dial(ctx, endpoint, 500*time.Millisecond); dialErr == nil {
+		_ = client.Close()
+		return endpoint, false, nil
 	}
 	exe, err := os.Executable()
 	if err != nil {

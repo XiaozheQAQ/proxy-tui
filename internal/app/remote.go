@@ -86,8 +86,15 @@ func (r *remote) invoke(ctx context.Context, method string, args []any, out any)
 			case <-time.After(delay):
 			}
 			if err := r.reconnect(ctx); err != nil {
-				lastErr = err
-				continue
+				if EnsureSupervisor != nil {
+					if ensureErr := EnsureSupervisor(ctx); ensureErr == nil {
+						err = r.reconnect(ctx)
+					}
+				}
+				if err != nil {
+					lastErr = err
+					continue
+				}
 			}
 		}
 		var result json.RawMessage

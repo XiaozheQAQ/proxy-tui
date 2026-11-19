@@ -67,7 +67,7 @@ func openApp() (*app.Frontend, error) {
 		}
 		return app.NewLocalFrontend(local), nil
 	}
-	if _, _, err := ensureSupervisor(context.Background()); err != nil {
+	if _, _, err := ensureSupervisor(context.Background(), false); err != nil {
 		return nil, err
 	}
 	client, err := dialSupervisor(context.Background())

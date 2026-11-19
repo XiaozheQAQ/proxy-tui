@@ -29,7 +29,7 @@ func Serve(ctx context.Context, paths storage.Paths, version string, backend Bac
 	defer cancel()
 
 	h := NewHandler(backend, endpoint, version, filepath.Join(paths.LogsDir(), "supervisor.log"), cancel)
-	server := ipc.NewServer(listener, h)
+	server := ipc.NewServer(listener, h.handle)
 	defer server.Close()
 
 	state := State{PID: os.Getpid(), StartedAt: time.Now(), Endpoint: endpoint, Version: version, Protocol: ipc.Version}
@@ -37,6 +37,14 @@ func Serve(ctx context.Context, paths storage.Paths, version string, backend Bac
 		return fmt.Errorf("persist supervisor state: %w", err)
 	}
 	defer RemoveState(paths)
+	if err := SaveLifecycle(paths, LifecycleRecord{Status: LifecycleRunning, PID: state.PID, StartedAt: state.StartedAt}); err != nil {
+		return fmt.Errorf("persist supervisor lifecycle: %w", err)
+	}
+	defer func() {
+		if h.Stopped() {
+			_ = SaveLifecycle(paths, LifecycleRecord{Status: LifecycleStopped, PID: state.PID, StartedAt: state.StartedAt})
+		}
+	}()
 	if logger != nil {
 		logger.Printf("supervisor listening on %s (pid %d)", endpoint, os.Getpid())
 	}
