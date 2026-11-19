@@ -15,7 +15,10 @@ import (
 
 // Serve binds the local endpoint, publishes state and serves until ctx ends.
 func Serve(ctx context.Context, paths storage.Paths, version string, backend Backend, logger *log.Logger) error {
-	endpoint := ipc.EndpointPath(paths.RuntimeDir())
+	endpoint, err := ipc.EndpointPath(paths.RuntimeDir())
+	if err != nil {
+		return err
+	}
 	listener, err := ipc.Listen(endpoint)
 	if err != nil {
 		return err

@@ -114,7 +114,10 @@ func runSupervisorStop(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	endpoint := ipc.EndpointPath(paths.RuntimeDir())
+	endpoint, err := ipc.EndpointPath(paths.RuntimeDir())
+	if err != nil {
+		return err
+	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		conn, dialErr := ipc.Dial(cmd.Context(), endpoint, 500*time.Millisecond)
@@ -152,7 +155,11 @@ func dialSupervisor(ctx context.Context) (*ipc.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	client, err := ipc.Dial(ctx, ipc.EndpointPath(paths.RuntimeDir()), 30*time.Second)
+	endpoint, err := ipc.EndpointPath(paths.RuntimeDir())
+	if err != nil {
+		return nil, err
+	}
+	client, err := ipc.Dial(ctx, endpoint, 30*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("supervisor unavailable: %w (run: proxy supervisor start)", err)
 	}
@@ -167,7 +174,11 @@ func supervisorCoreAction(ctx context.Context, operation string, kind model.Core
 	if err != nil {
 		return supervisor.CoreAction{}, false, nil
 	}
-	client, err := ipc.Dial(ctx, ipc.EndpointPath(paths.RuntimeDir()), 2*time.Minute)
+	endpoint, err := ipc.EndpointPath(paths.RuntimeDir())
+	if err != nil {
+		return supervisor.CoreAction{}, false, err
+	}
+	client, err := ipc.Dial(ctx, endpoint, 2*time.Minute)
 	if err != nil {
 		return supervisor.CoreAction{}, false, nil
 	}
@@ -183,7 +194,10 @@ func ensureSupervisor(ctx context.Context) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
-	endpoint := ipc.EndpointPath(paths.RuntimeDir())
+	endpoint, err := ipc.EndpointPath(paths.RuntimeDir())
+	if err != nil {
+		return "", false, err
+	}
 	if client, dialErr := ipc.Dial(ctx, endpoint, time.Second); dialErr == nil {
 		var status map[string]string
 		_ = client.Call(ctx, ipc.OpPing, nil, &status)

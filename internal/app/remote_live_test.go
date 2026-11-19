@@ -26,7 +26,11 @@ func TestLiveRemoteFrontend(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	client, err := ipc.Dial(ctx, ipc.EndpointPath(paths.RuntimeDir()), 5*time.Second)
+	endpoint, err := ipc.EndpointPath(paths.RuntimeDir())
+	if err != nil {
+		t.Fatalf("endpoint: %v", err)
+	}
+	client, err := ipc.Dial(ctx, endpoint, 5*time.Second)
 	if err != nil {
 		t.Fatalf("dial supervisor: %v", err)
 	}
@@ -52,7 +56,7 @@ func TestLiveRemoteFrontend(t *testing.T) {
 	if err := frontend.SaveSettings(ctx, settings); err != nil {
 		t.Fatalf("save settings through supervisor: %v", err)
 	}
-	secondClient, err := ipc.Dial(ctx, ipc.EndpointPath(paths.RuntimeDir()), 5*time.Second)
+	secondClient, err := ipc.Dial(ctx, endpoint, 5*time.Second)
 	if err != nil {
 		t.Fatalf("second dial: %v", err)
 	}

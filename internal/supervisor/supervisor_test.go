@@ -133,7 +133,11 @@ func startServer(t *testing.T, paths storage.Paths, backend Backend) (string, co
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- Serve(ctx, paths, "test", backend, nil) }()
-	endpoint := ipc.EndpointPath(paths.RuntimeDir())
+	endpoint, err := ipc.EndpointPath(paths.RuntimeDir())
+	if err != nil {
+		cancel()
+		t.Fatalf("endpoint: %v", err)
+	}
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		conn, err := ipc.Dial(ctx, endpoint, 200*time.Millisecond)
@@ -364,7 +368,11 @@ func TestVersionMismatch(t *testing.T) {
 		cancel()
 		<-done
 	}()
-	conn, err := ipc.DialConn(context.Background(), ipc.EndpointPath(paths.RuntimeDir()))
+	endpoint, err := ipc.EndpointPath(paths.RuntimeDir())
+	if err != nil {
+		t.Fatalf("endpoint: %v", err)
+	}
+	conn, err := ipc.DialConn(context.Background(), endpoint)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

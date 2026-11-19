@@ -40,7 +40,11 @@ func NewRemote(ctx context.Context, client *ipc.Client) (*Frontend, error) {
 	if err := r.invoke(ctx, "ConfigInfo", nil, &info); err != nil {
 		return nil, err
 	}
-	r.endpoint = ipc.EndpointPath(info.Paths.RuntimeDir())
+	endpoint, err := ipc.EndpointPath(info.Paths.RuntimeDir())
+	if err != nil {
+		return nil, err
+	}
+	r.endpoint = endpoint
 	frontend := &Frontend{
 		Cores:    &remoteCores{r: r},
 		Subs:     &remoteSubs{r: r},
