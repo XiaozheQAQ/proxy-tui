@@ -437,6 +437,11 @@ func (a *App) StartCore(ctx context.Context, kind model.CoreKind) error {
 }
 
 // RestartCore restarts a core with the currently active profile.
+// StopCore stops the active core.
+func (a *App) StopCore(ctx context.Context, kind model.CoreKind) error {
+	return a.Cores.Stop(ctx, kind)
+}
+
 func (a *App) RestartCore(ctx context.Context, kind model.CoreKind) error {
 	profile, ok := a.Subs.ActiveFor(kind)
 	if !ok {

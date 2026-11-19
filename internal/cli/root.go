@@ -41,6 +41,7 @@ Run "proxy" without arguments to open the TUI.`),
 		newNetworkCommand(),
 		newStatusCommand(),
 		newDoctorCommand(),
+		newSupervisorCommand(),
 		newVersionCommand(),
 	)
 	return root

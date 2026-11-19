@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/proxytui/proxy-tui/internal/ipc"
 	"github.com/proxytui/proxy-tui/internal/subscription/model"
 )
 
@@ -106,12 +107,19 @@ func runCoreStart(cmd *cobra.Command, raw string) error {
 	if err != nil {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if action, handled, err := supervisorCoreAction(ctx, ipc.OpCoreStart, kind); handled {
+		if err != nil {
+			return err
+		}
+		printLine(cmd.OutOrStdout(), "%s started via supervisor (%s)", kind.DisplayName(), action.State)
+		return nil
+	}
 	application, err := openApp()
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
 	if err := application.StartCore(ctx, kind); err != nil {
 		return err
 	}
@@ -124,12 +132,23 @@ func runCoreStop(cmd *cobra.Command, raw string) error {
 	if err != nil {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if action, handled, err := supervisorCoreAction(ctx, ipc.OpCoreStop, kind); handled {
+		if err != nil {
+			return err
+		}
+		state := action.State
+		if action.Already {
+			state = "already stopped"
+		}
+		printLine(cmd.OutOrStdout(), "%s %s via supervisor", kind.DisplayName(), state)
+		return nil
+	}
 	application, err := openApp()
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
 	if err := application.Cores.Stop(ctx, kind); err != nil {
 		return err
 	}
