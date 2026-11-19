@@ -13,6 +13,8 @@ import (
 
 func runCLI(t *testing.T, args ...string) (string, error) {
 	t.Helper()
+	localFrontendForTests = true
+	t.Cleanup(func() { localFrontendForTests = false })
 	root := newRootCommand()
 	buffer := new(bytes.Buffer)
 	root.SetOut(buffer)

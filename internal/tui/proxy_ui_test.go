@@ -45,6 +45,20 @@ func TestProxyPickerOpensWithRunningCore(t *testing.T) {
 	}
 }
 
+func TestDisconnectedSupervisorBlocksMutations(t *testing.T) {
+	ui := newTestModel(t, 120, 36)
+	ui.supervisorErr = "supervisor unavailable"
+	cmd := ui.dispatch(pages.Action{Kind: pages.ActionStartCore, Core: model.CoreMihomo})
+	if cmd != nil {
+		t.Fatal("mutation must be blocked while the supervisor is disconnected")
+	}
+	ui.rebuildData()
+	view := ui.View()
+	if !strings.Contains(view, "DISCONNECTED") {
+		t.Fatalf("overview must show a disconnected supervisor:\n%s", view)
+	}
+}
+
 func TestVerifyProxyStartsExplicitAction(t *testing.T) {
 	ui := runningMihomoModel(t)
 	cmd := ui.dispatch(pages.Action{Kind: pages.ActionVerifyProxy, Core: model.CoreMihomo})

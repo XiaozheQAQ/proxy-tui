@@ -28,7 +28,7 @@ func newTestModel(t *testing.T, width, height int) *Model {
 	if err != nil {
 		t.Fatalf("app.New: %v", err)
 	}
-	ui := New(application)
+	ui := New(app.NewLocalFrontend(application))
 	ui.Update(tea.WindowSizeMsg{Width: width, Height: height})
 	return ui
 }

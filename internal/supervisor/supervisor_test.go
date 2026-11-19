@@ -2,7 +2,9 @@ package supervisor
 
 import (
 	"context"
+	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +17,24 @@ import (
 	"github.com/proxytui/proxy-tui/internal/tun"
 )
 
+type fakeFacade struct {
+	active int32
+	max    int32
+}
+
+func (f *fakeFacade) CoreRestart(ctx context.Context) error {
+	current := atomic.AddInt32(&f.active, 1)
+	for {
+		observed := atomic.LoadInt32(&f.max)
+		if current <= observed || atomic.CompareAndSwapInt32(&f.max, observed, current) {
+			break
+		}
+	}
+	time.Sleep(30 * time.Millisecond)
+	atomic.AddInt32(&f.active, -1)
+	return nil
+}
+
 type fakeBackend struct {
 	mu       sync.Mutex
 	statuses map[model.CoreKind]core.Status
@@ -22,6 +42,7 @@ type fakeBackend struct {
 	stops    int
 	tunOn    bool
 	backup   bool
+	facade   any
 }
 
 func newFakeBackend() *fakeBackend {
@@ -83,10 +104,17 @@ func (b *fakeBackend) TUNStatus(context.Context) (tun.Status, error) {
 }
 
 func (b *fakeBackend) LogsTail(int) []logging.Entry { return nil }
+func (b *fakeBackend) Callable() any                { return b.facade }
 
 func testPaths(t *testing.T) storage.Paths {
 	t.Helper()
-	dir := t.TempDir()
+	// Windows AF_UNIX paths are short; t.TempDir() includes the test name and can
+	// exceed the limit for long test names.
+	dir, err := os.MkdirTemp("", "pt-sup-")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	paths := storage.Paths{
 		Config: dir + "/config",
 		Data:   dir + "/data",
@@ -228,6 +256,62 @@ func TestStopGuards(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("server did not stop")
+	}
+}
+
+func TestFacadeCallsAreSerialized(t *testing.T) {
+	paths := testPaths(t)
+	backend := newFakeBackend()
+	facade := &fakeFacade{}
+	backend.facade = facade
+	endpoint, cancel, done := startServer(t, paths, backend)
+	defer func() {
+		cancel()
+		<-done
+	}()
+	const clients = 6
+	results := make(chan error, clients)
+	for i := 0; i < clients; i++ {
+		go func() {
+			c, err := ipc.Dial(context.Background(), endpoint, time.Second)
+			if err != nil {
+				results <- err
+				return
+			}
+			defer c.Close()
+			results <- c.Call(context.Background(), ipc.OpAppCall, map[string]any{"method": "CoreRestart"}, nil)
+		}()
+	}
+	for i := 0; i < clients; i++ {
+		if err := <-results; err != nil {
+			t.Fatalf("call: %v", err)
+		}
+	}
+	if got := atomic.LoadInt32(&facade.max); got != 1 {
+		t.Fatalf("concurrent facade mutations observed: max=%d", got)
+	}
+}
+
+func TestFacadeRejectsUnknownMethod(t *testing.T) {
+	paths := testPaths(t)
+	backend := newFakeBackend()
+	backend.facade = &fakeFacade{}
+	endpoint, cancel, done := startServer(t, paths, backend)
+	defer func() {
+		cancel()
+		<-done
+	}()
+	client, err := ipc.Dial(context.Background(), endpoint, time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	err = client.Call(context.Background(), ipc.OpAppCall, map[string]any{"method": "Shell"}, nil)
+	if err == nil {
+		t.Fatal("unknown method must fail")
+	}
+	if rpcErr, ok := err.(*ipc.RPCError); !ok || rpcErr.Code != ipc.CodeInternal {
+		t.Fatalf("error = %v", err)
 	}
 }
 
