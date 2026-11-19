@@ -59,8 +59,9 @@ type handler struct {
 	logPath  string
 	cancel   context.CancelFunc
 
-	mutation sync.Mutex
-	stopped  atomic.Bool
+	mutation    sync.Mutex
+	stopped     atomic.Bool
+	persistStop func() error
 
 	cacheMu sync.Mutex
 	cache   map[string]cacheEntry
@@ -88,15 +89,16 @@ const (
 )
 
 // NewHandler builds the RPC handler.
-func NewHandler(backend Backend, endpoint, version, logPath string, cancel context.CancelFunc) *handler {
+func NewHandler(backend Backend, endpoint, version, logPath string, cancel context.CancelFunc, persistStop func() error) *handler {
 	h := &handler{
-		backend:  backend,
-		endpoint: endpoint,
-		version:  version,
-		started:  time.Now(),
-		logPath:  logPath,
-		cancel:   cancel,
-		cache:    map[string]cacheEntry{},
+		backend:     backend,
+		endpoint:    endpoint,
+		version:     version,
+		started:     time.Now(),
+		logPath:     logPath,
+		cancel:      cancel,
+		persistStop: persistStop,
+		cache:       map[string]cacheEntry{},
 	}
 	return h
 }
@@ -217,6 +219,11 @@ func (h *handler) stop(ctx context.Context, request ipc.Request) ipc.Response {
 	}
 	if report.BackupActive {
 		return failResponse(request, ipc.CodeNetworkBlocked, "proxy-tui still owns the desktop proxy; restore it first")
+	}
+	if h.persistStop != nil {
+		if err := h.persistStop(); err != nil {
+			return failResponse(request, ipc.CodeInternal, "persist stop intent: "+err.Error())
+		}
 	}
 	h.stopped.Store(true)
 	go func() {

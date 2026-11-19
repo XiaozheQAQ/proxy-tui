@@ -11,11 +11,12 @@ import (
 
 // State is persisted so clients can discover a running supervisor.
 type State struct {
-	PID       int       `json:"pid"`
-	StartedAt time.Time `json:"started_at"`
-	Endpoint  string    `json:"endpoint"`
-	Version   string    `json:"version"`
-	Protocol  int       `json:"protocol"`
+	InstanceID string    `json:"instance_id"`
+	PID        int       `json:"pid"`
+	StartedAt  time.Time `json:"started_at"`
+	Endpoint   string    `json:"endpoint"`
+	Version    string    `json:"version"`
+	Protocol   int       `json:"protocol"`
 }
 
 // StatePath returns the supervisor state file.

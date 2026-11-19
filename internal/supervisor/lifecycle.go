@@ -1,7 +1,10 @@
 package supervisor
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -20,10 +23,22 @@ const (
 
 // LifecycleRecord is persisted next to supervisor-state.json.
 type LifecycleRecord struct {
-	Status    LifecycleStatus `json:"status"`
-	PID       int             `json:"pid"`
-	StartedAt time.Time       `json:"started_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	Version    int             `json:"version"`
+	InstanceID string          `json:"instance_id"`
+	Status     LifecycleStatus `json:"status"`
+	PID        int             `json:"pid"`
+	StartedAt  time.Time       `json:"started_at"`
+	UpdatedAt  time.Time       `json:"updated_at"`
+	Source     string          `json:"source"`
+}
+
+// NewInstanceID returns a random supervisor instance identifier.
+func NewInstanceID() string {
+	var buffer [16]byte
+	if _, err := rand.Read(buffer[:]); err != nil {
+		return fmt.Sprintf("pid-%d-%d", os.Getpid(), time.Now().UnixNano())
+	}
+	return hex.EncodeToString(buffer[:])
 }
 
 // LifecyclePath returns the persisted lifecycle record path.

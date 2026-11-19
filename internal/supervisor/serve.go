@@ -28,21 +28,27 @@ func Serve(ctx context.Context, paths storage.Paths, version string, backend Bac
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	h := NewHandler(backend, endpoint, version, filepath.Join(paths.LogsDir(), "supervisor.log"), cancel)
+	state := State{InstanceID: NewInstanceID(), PID: os.Getpid(), StartedAt: time.Now(), Endpoint: endpoint, Version: version, Protocol: ipc.Version}
+	persistStop := func() error {
+		return SaveLifecycle(paths, LifecycleRecord{
+			Version: 1, InstanceID: state.InstanceID, Status: LifecycleStopped,
+			PID: state.PID, StartedAt: state.StartedAt, Source: "supervisor.stop",
+		})
+	}
+	h := NewHandler(backend, endpoint, version, filepath.Join(paths.LogsDir(), "supervisor.log"), cancel, persistStop)
 	server := ipc.NewServer(listener, h.handle)
 	defer server.Close()
 
-	state := State{PID: os.Getpid(), StartedAt: time.Now(), Endpoint: endpoint, Version: version, Protocol: ipc.Version}
 	if err := SaveState(paths, state); err != nil {
 		return fmt.Errorf("persist supervisor state: %w", err)
 	}
 	defer RemoveState(paths)
-	if err := SaveLifecycle(paths, LifecycleRecord{Status: LifecycleRunning, PID: state.PID, StartedAt: state.StartedAt}); err != nil {
+	if err := SaveLifecycle(paths, LifecycleRecord{Version: 1, InstanceID: state.InstanceID, Status: LifecycleRunning, PID: state.PID, StartedAt: state.StartedAt, Source: "supervisor.start"}); err != nil {
 		return fmt.Errorf("persist supervisor lifecycle: %w", err)
 	}
 	defer func() {
 		if h.Stopped() {
-			_ = SaveLifecycle(paths, LifecycleRecord{Status: LifecycleStopped, PID: state.PID, StartedAt: state.StartedAt})
+			_ = persistStop()
 		}
 	}()
 	if logger != nil {

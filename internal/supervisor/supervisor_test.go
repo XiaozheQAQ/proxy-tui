@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -358,6 +359,52 @@ func TestFacadeRejectsUnknownMethod(t *testing.T) {
 	}
 	if rpcErr, ok := err.(*ipc.RPCError); !ok || rpcErr.Code != ipc.CodeInternal {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestStopIntentPersistedBeforeShutdown(t *testing.T) {
+	paths := testPaths(t)
+	backend := newFakeBackend()
+	endpoint, cancel, done := startServer(t, paths, backend)
+	defer func() {
+		cancel()
+		<-done
+	}()
+	client, err := ipc.Dial(context.Background(), endpoint, time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	if err := client.Call(context.Background(), ipc.OpSupervisorStop, nil, nil); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	record, err := LoadLifecycle(paths)
+	if err != nil {
+		t.Fatalf("lifecycle: %v", err)
+	}
+	if record == nil || record.Status != LifecycleStopped {
+		t.Fatalf("stop intent was not persisted before shutdown: %+v", record)
+	}
+	if record.InstanceID == "" || record.Version != 1 || record.Source != "supervisor.stop" {
+		t.Fatalf("lifecycle metadata incomplete: %+v", record)
+	}
+}
+
+func TestStopRefusedWhenIntentCannotPersist(t *testing.T) {
+	paths := testPaths(t)
+	backend := newFakeBackend()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h := NewHandler(backend, "endpoint", "test", paths.LogsDir()+"/supervisor.log", cancel, func() error {
+		return errors.New("disk full")
+	})
+	request := ipc.Request{Version: ipc.Version, RequestID: "req-stop", Operation: ipc.OpSupervisorStop}
+	response := h.handle(ctx, request)
+	if response.Success {
+		t.Fatal("stop must fail when the stop intent cannot be persisted")
+	}
+	if h.Stopped() {
+		t.Fatal("handler must not mark itself stopped after a failed persist")
 	}
 }
 
