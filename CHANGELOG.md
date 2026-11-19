@@ -52,6 +52,10 @@ Phase 3A/3B/3C: transactional network state, desktop system proxy and core-nativ
     configuration is labelled, and core identity now also includes the binary SHA-256.
   * `network tun preflight` exits 0 when the inspection completed; activation remains the
     job of `network tun enable`.
+  * Phase 3D.2.3 Windows IPC: replaced AF_UNIX with a go-winio v0.6.2 Named Pipe, restricted
+    by an explicit Logon-SID DACL; go-winio rejects remote clients and pipe-name conflicts
+    fail closed. Added native Windows pipe lifecycle tests (32 clients, 100 restarts, partial
+    frames, close/unblock, conflict, DACL). Cross-SID denial remains NOT TESTED.
   * Phase 3D.2.2 hardening: operation result lifecycle (`proxy operation status`,
     RUNNING/SUCCEEDED/FAILED/EXPIRED with a five-minute bounded cache) and shared settings
     ownership. A Windows Named Pipe transport was prototyped but reverted due handle

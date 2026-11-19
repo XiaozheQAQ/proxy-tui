@@ -70,18 +70,18 @@ result.
 | Item | Windows | Linux | macOS |
 |---|---|---|---|
 | Supervisor process | yes (detached, per user) | yes (setsid, per user) | yes (setsid, per user) |
-| IPC transport | AF_UNIX under LocalAppData (verified) | Unix socket 0600 | Unix socket 0600 |
-| Named Pipe / SID ACL | **not shipped** (AF_UNIX) | n/a | n/a |
+| IPC transport | Named Pipe (go-winio v0.6.2) | Unix socket 0600 | Unix socket 0600 |
+| Named Pipe / SID ACL | Logon-SID DACL, remote clients rejected; cross-SID NOT TESTED | n/a | n/a |
 | Single instance | atomic socket bind | atomic socket bind | atomic socket bind |
-| Peer authentication | no (AF_UNIX) | yes (SO_PEERCRED) | yes (LOCAL_PEERCRED) |
+| Peer authentication | Logon-SID DACL (kernel) | yes (SO_PEERCRED) | yes (LOCAL_PEERCRED) |
 | Shared settings writes | supervisor IPC | supervisor IPC | supervisor IPC |
 | Operation dedupe / reconnect | yes / bounded retransport | yes / bounded | yes / bounded |
-| TUI/CLI over IPC | yes (AF_UNIX, Windows verified) | yes (compiled, not live-run) | yes (compiled, not live-run) |
+| TUI/CLI over IPC | yes (Named Pipe, Windows live-verified) | yes (compiled, not live-run) | yes (compiled, not live-run) |
 
-The supervisor and IPC are compiled and unit/integration tested on Windows; Linux/macOS
-builds pass, but the transport has not been run on those hosts. Linux/macOS peer credential
-checks are implemented; Windows AF_UNIX has no peer credentials, so Named Pipe ACL hardening
-is still required before claiming the full Windows security model.
+The supervisor and IPC are compiled and natively tested on Windows, including Named Pipe
+lifecycle and live Supervisor/TUI/CLI checks. Cross-SID denial is NOT TESTED. Linux/macOS
+builds pass and peer credential checks are implemented, but the transport has not been run
+natively on those hosts.
 
 ## Proxy selection support
 

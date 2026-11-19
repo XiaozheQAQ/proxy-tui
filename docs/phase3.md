@@ -220,7 +220,8 @@ clients produced exactly one core start.
 
 TUI and CLI now use a remote `app.Frontend` through IPC; bare `proxy` and CLI commands
 ensure the supervisor, and the production paths have no local fallback. Unix peers are
-checked by UID; Windows AF_UNIX still lacks Named Pipe/SID ACL enforcement. Reconnect,
+checked by UID; Windows uses a go-winio Named Pipe with a Logon-SID DACL (cross-SID test
+still pending). Reconnect,
 multi-TUI live mutation tests, 3D.3 and 3D.4 remain open. See `docs/phase3d.md`.
 
 Today cores are children of the `proxy` process. A started core keeps running when the TUI

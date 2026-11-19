@@ -1,8 +1,9 @@
 # Phase 3D — Supervisor & IPC
 
-Status: **3D.1 implemented; 3D.2 client migration implemented, but not COMPLETE because
-Windows IPC authentication (Named Pipe/SID ACL) and multi-TUI live validation are still
-outstanding. 3D.3/3D.4 not started.**
+Status: **3D.1 implemented; 3D.2 client migration implemented and Windows Named Pipe
+shipped. Not COMPLETE because cross-SID denial, native Linux/macOS authentication,
+supervisor auto-ensure and multi-TUI live validation remain outstanding. 3D.3/3D.4 not
+started.**
 
 ## Architecture now
 
@@ -58,7 +59,7 @@ outstanding. 3D.3/3D.4 not started.**
 |---|---|---|---|
 | Linux | Unix socket 0600, dir 0700 | `SO_PEERCRED` UID check | compiled and unit-tested; not run on a native Linux host this round |
 | macOS | Unix socket 0600, dir 0700 | `LOCAL_PEERCRED` UID check | cross-compiled; not run |
-| Windows | AF_UNIX under LocalAppData | **none**; no Named Pipe/SID ACL | run on Windows; relies on per-user profile ACL |
+| Windows | Named Pipe `\\.\pipe\proxy-tui-<LogonSID>` | Logon-SID DACL; go-winio rejects remote clients | native Windows lifecycle + live Supervisor/TUI/CLI PASS; cross-SID NOT TESTED |
 
 No TCP endpoint is exposed. There is no token; Unix relies on peer credentials, Windows on
 directory ownership. Cross-user adversarial tests have not been run. Windows Named Pipe with
@@ -73,9 +74,8 @@ an explicit SID ACL remains required before claiming Windows IPC security.
   supervisor process itself has exited, the remote client does not auto-ensure a new
   supervisor yet; the TUI reports DISCONNECTED and blocks writes until a supervisor is
   started manually.
-- Windows Named Pipe/SID ACL and cross-user denial are missing. A Named Pipe transport was
-  attempted in this round but was reverted after handle-lifecycle crashes; Windows remains
-  on AF_UNIX without peer authentication.
+- Cross-SID denial is not yet tested; the Logon-SID DACL is present and observed live, but
+  no second account was used.
 - Payload fuzzing, secret-in-log tests and route-replacement tests are not added.
 - TUI-internal Disable (Phase 3C.6) still requires real manual acceptance.
 - 3D.3 health monitor/auto-restart and 3D.4 autostart are not started.

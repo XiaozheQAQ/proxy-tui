@@ -1,7 +1,8 @@
 # Supervisor IPC protocol
 
-Version `1`, JSON request/response over a user-local Unix-domain socket (Windows 10+
-AF_UNIX). Each message has a 4-byte big-endian length prefix; maximum message size 1 MiB.
+Version `1`, JSON request/response over a Windows Named Pipe (go-winio, Logon-SID DACL,
+remote clients rejected) or a user-local Unix-domain socket. Each message has a 4-byte
+big-endian length prefix; maximum message size 1 MiB.
 
 ## Messages
 
@@ -41,8 +42,8 @@ Errors: `SUPERVISOR_UNAVAILABLE`, `PROTOCOL_VERSION_MISMATCH`, `UNAUTHORIZED`,
 
 ## Security limitations
 
-The endpoint is a socket in the user runtime directory with mode 0600 (Unix) and inherits
-the per-user LocalAppData profile on Windows. Linux verifies `SO_PEERCRED` UID and macOS
-verifies `LOCAL_PEERCRED` UID before serving a connection. Windows AF_UNIX has no peer
-credentials in this implementation and no Named Pipe SID ACL yet; it relies on the per-user
-directory. There is no token. Never expose the endpoint over TCP.
+Unix endpoints are sockets in the user runtime directory with mode 0600; Linux verifies
+`SO_PEERCRED` UID and macOS verifies `LOCAL_PEERCRED` UID before serving a connection.
+Windows uses `\\.\pipe\proxy-tui-<LogonSID>` with an explicit protected DACL granting only
+that Logon SID; the kernel enforces access at connect time and go-winio rejects remote
+clients. There is no token. Never expose the endpoint over TCP.

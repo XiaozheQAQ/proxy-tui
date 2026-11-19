@@ -1,47 +1,43 @@
-# Phase 3D.2.2 — Security & Coordination Hardening
+# Phase 3D.2.2 / 3D.2.3 — Security & Coordination Hardening
 
-Status: **PARTIAL.** Shared settings, OperationID dedupe and bounded reconnect are
-implemented and tested. Windows Named Pipe/SID ACL is **not shipped** (an implementation was
-attempted but its handle lifecycle caused crashes in testing and was reverted). Cross-SID,
-native Linux/macOS and multi-TUI interactive acceptance remain NOT TESTED.
+Status: **Windows Named Pipe transport implemented and natively tested (Round 1). Phase 3D.2
+is still PARTIAL because cross-SID denial, native Linux/macOS authentication, supervisor
+auto-ensure after a crash, and two-TUI interactive acceptance remain open.**
 
-## Delivered
+## Windows Named Pipe (Round 1)
 
-- Shared settings: TUI/CLI use `SettingsSnapshot`/`UpdateSettings`; no direct `config.json`
-  writes. Supervisor atomically writes and only then updates its in-memory copy.
-- Operation lifecycle: mutation requests carry `operation_id`; the supervisor records
-  RUNNING/SUCCEEDED/FAILED and caches results for five minutes. Duplicate IDs return the
-  cached result; concurrent duplicates return `OPERATION_IN_PROGRESS`.
-- `proxy operation status <id> [--json]` queries a result without executing anything.
-- Remote frontend retries transport failures with 1s/2s/5s/10s and reuses the operation ID.
-  It reconnects to the same endpoint but does not auto-start a supervisor after a process
-  exit yet.
-- Unix: Linux `SO_PEERCRED` and macOS `LOCAL_PEERCRED` verification code exists; only
-  cross-compiled, not run natively.
+- Transport: go-winio v0.6.2, pinned in go.mod/go.sum.
+- Endpoint: `\\.\pipe\proxy-tui-<LogonSID>`; Logon SID failure fails closed.
+- DACL: `D:P(A;;GA;;;<LogonSID>)` only; kernel-enforced at connect.
+- Remote clients rejected by go-winio's `FILE_PIPE_REJECT_REMOTE_CLIENTS`.
+- No AF_UNIX fallback on Windows; pipe-name conflicts fail closed.
+- Shared RPC layer unchanged (framing, RequestID, OperationID, 1 MiB limit, errors).
 
-## Not delivered
+### Tests (native Windows)
 
-- **Windows Named Pipe + SID DACL / client SID verification is not in the shipped binary.**
-  Windows still uses AF_UNIX under LocalAppData and has no peer-credential check.
-- No real cross-SID denial test (only one enabled local account).
-- No native Linux/macOS integration run.
-- No interactive two-TUI live acceptance; concurrency was exercised via CLI/IPC tests.
-- Supervisor auto-ensure after a crashed supervisor is not implemented.
-- Operation result is only available for IDs the client generated; the CLI does not expose
-  the ID of an operation it started.
-- Payload fuzzing, path-replacement and secret-regression tests are incomplete.
-- Phase 3C.6 TUI Disable remains NOT TESTED.
+- Round trip, 32 concurrent clients, 100 start/close cycles, Close unblocking Accept,
+  partial frame followed by a healthy client, server close errors clients, name conflict,
+  DACL assertions: all PASS.
+- Live: Supervisor start, DACL observation, 5 concurrent CLI clients, operation query, TUI
+  connect, TUI exit without stopping the supervisor, normal stop, restart, no process or
+  pipe leftovers: PASS.
+- Cross-SID denial: **NOT TESTED** (no second enabled local account; none created).
 
-## Tests
+## Other hardening
 
-- Shared settings visible across two remote clients (live).
-- Duplicate OperationID executes once; distinct ID executes twice; operation status
-  SUCCEEDED (unit).
-- Facade mutations serialized; unknown facade method rejected.
-- 8 concurrent core starts -> one start.
-- Transport failure reconnect code exists (not live-tested with a supervisor restart).
-- `gofmt`/`go vet`/`go test ./...`/`-race` and five-platform builds pass.
+- Shared settings: TUI/CLI use `SettingsSnapshot`/`UpdateSettings`; supervisor atomically
+  writes and updates memory only after success.
+- Operation lifecycle: RUNNING/SUCCEEDED/FAILED cache (5 min, 256 entries); duplicate IDs
+  return cached results; `proxy operation status <id>` queries without executing.
+- Remote retries transport failures with 1s/2s/5s/10s and reuses the operation ID.
+- Unix peer credential checks are implemented (Linux/macOS), but native execution is
+  **NOT TESTED**.
 
-## Completion
+## Remaining for Rounds 2/3
 
-Phase 3D.2 remains **PARTIAL**; 3D.3/3D.4 are not started.
+- Real cross-SID denial test (controlled second account or CI runner).
+- Native Linux/macOS peer-credential integration tests.
+- Supervisor crash vs intentional stop detection and safe auto-ensure.
+- Two real TUI clients: shared node/Traffic Mode consistency.
+- Phase 3C.6 TUI Disable manual acceptance (still NOT TESTED).
+- Payload fuzz, path replacement and secret-log regression tests.

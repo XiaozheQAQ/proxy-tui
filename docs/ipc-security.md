@@ -2,16 +2,31 @@
 
 | Platform | Transport | Authentication | Real verification |
 |---|---|---|---|
-| Windows | AF_UNIX under LocalAppData | **none** (no peer credentials; Named Pipe not shipped) | Windows run, but cross-user denial NOT TESTED |
+| Windows | Named Pipe `\\.\pipe\proxy-tui-<LogonSID>` | explicit DACL granting only the current Logon SID | Windows live: 5 concurrent CLI, TUI, restart PASS; cross-SID NOT TESTED |
 | Linux | Unix socket 0600, dir 0700 | `SO_PEERCRED` UID check | cross-compiled only |
 | macOS | Unix socket 0600, dir 0700 | `LOCAL_PEERCRED` UID check | cross-compiled only |
 
-- No TCP endpoint is exposed.
-- Unix peer UID mismatch is rejected before serving a request.
-- Windows relies on the per-user LocalAppData directory ACL. A Named Pipe with an explicit
-  user-SID DACL and server-side client SID check is required before claiming Windows IPC
-  security. An attempt in this round was reverted after handle-lifecycle crashes.
-- No token authentication exists.
-- Request payloads are decoded into fixed facade method signatures; arbitrary methods and
-  free-form paths are not reachable. Message size is capped at 1 MiB.
-- Cross-user adversarial tests and secret-log regression tests are NOT TESTED.
+## Windows
+
+- Transport: `github.com/Microsoft/go-winio v0.6.2` (pinned), `winio.ListenPipe` /
+  `winio.DialPipeContext`.
+- Endpoint suffix is the process **Logon SID**; endpoints are isolated per login session.
+  Logon SID retrieval failure fails closed (no endpoint, no server).
+- DACL: `D:P(A;;GA;;;<LogonSID>)` — no Everyone, Anonymous, Authenticated Users, SYSTEM or
+  Administrators entries. The DACL is protected.
+- Access control is enforced by the Windows kernel at connect time. go-winio's public API
+  does not expose a reliable client PID to application code, so there is no additional
+  app-layer SID check; this is documented rather than faked.
+- go-winio v0.6.2 creates pipes with `FILE_PIPE_REJECT_REMOTE_CLIENTS` (verified in its
+  source), so remote SMB clients are rejected.
+- Pipe creation fails if the name already exists (no takeover of an unknown object); the
+  server never falls back to AF_UNIX.
+- Live DACL observation: the pipe ACL contains only the Logon SID with FullControl.
+- Cross-SID denial: **NOT TESTED** — this machine has no second enabled local account and no
+  account was created. It is not claimed as passed.
+
+## Unix
+
+- Socket mode 0600, parent directory 0700.
+- Linux verifies `SO_PEERCRED` UID; macOS verifies `LOCAL_PEERCRED` UID before serving.
+- Native integration tests on real Linux/macOS were **NOT RUN** this round.

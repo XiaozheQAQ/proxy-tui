@@ -78,7 +78,8 @@ configs/templates             embedded base configs for node-only subscriptions
                                    └── Mihomo / sing-box
 
 The supervisor is the same binary with the hidden `supervisor run` command. It is started
-detached, binds a user-local socket atomically, writes `supervisor-state.json` and serves
+detached and binds either a Windows Named Pipe (go-winio, Logon-SID DACL, remote clients
+rejected) or a Unix socket (0600, UID peer check), writes `supervisor-state.json` and serves
 versioned length-framed JSON. Mutations are serialized by a supervisor mutex; reads may
 run concurrently. CLI core lifecycle calls use IPC when the supervisor is running.
 
