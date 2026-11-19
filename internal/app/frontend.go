@@ -71,6 +71,8 @@ type FrontendAPI interface {
 	OwnProxyAddress() string
 	VerifyProxyConnectivity(ctx context.Context) ProxyConnectivity
 	CoreBinaryPath(kind model.CoreKind) string
+	SettingsSnapshot(ctx context.Context) storage.Settings
+	UpdateSettings(ctx context.Context, settings storage.Settings) error
 	Health(ctx context.Context) error
 }
 
@@ -142,3 +144,15 @@ func (f *Frontend) VerifyProxyConnectivity(ctx context.Context) ProxyConnectivit
 }
 func (f *Frontend) CoreBinaryPath(kind model.CoreKind) string { return f.api.CoreBinaryPath(kind) }
 func (f *Frontend) Health(ctx context.Context) error          { return f.api.Health(ctx) }
+
+func (f *Frontend) SettingsSnapshot(ctx context.Context) storage.Settings {
+	return f.api.SettingsSnapshot(ctx)
+}
+
+func (f *Frontend) SaveSettings(ctx context.Context, settings storage.Settings) error {
+	if err := f.api.UpdateSettings(ctx, settings); err != nil {
+		return err
+	}
+	f.Settings = settings
+	return nil
+}

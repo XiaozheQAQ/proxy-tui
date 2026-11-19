@@ -11,7 +11,6 @@ import (
 
 	"github.com/proxytui/proxy-tui/internal/app"
 	"github.com/proxytui/proxy-tui/internal/network"
-	"github.com/proxytui/proxy-tui/internal/storage"
 	"github.com/proxytui/proxy-tui/internal/subscription/model"
 	"github.com/proxytui/proxy-tui/internal/tun"
 )
@@ -117,7 +116,7 @@ func applyTrafficMode(cmd *cobra.Command, mode network.Mode) error {
 		}
 		return err
 	}
-	if err := saveTrafficMode(application.Paths, mode); err != nil {
+	if err := saveTrafficMode(ctx, application, mode); err != nil {
 		printLine(cmd.OutOrStdout(), "warning: could not persist the traffic mode: %v", err)
 	}
 
@@ -198,13 +197,10 @@ func appTunSettings(application *app.Frontend) tun.Settings {
 	return app.TunSettingsFrom(application.Settings)
 }
 
-func saveTrafficMode(paths storage.Paths, mode network.Mode) error {
-	settings, err := storage.LoadSettings(paths)
-	if err != nil {
-		return err
-	}
+func saveTrafficMode(ctx context.Context, application *app.Frontend, mode network.Mode) error {
+	settings := application.SettingsSnapshot(ctx)
 	settings.TrafficMode = string(mode)
-	return storage.SaveSettings(paths, settings)
+	return application.SaveSettings(ctx, settings)
 }
 
 func newNetworkTunCommand() *cobra.Command {
@@ -320,10 +316,10 @@ func runTUNEnable(cmd *cobra.Command) error {
 		printPreflightReport(cmd, result.TUN.Report)
 		return err
 	}
-	if err := saveTunConfig(application, kind, settings); err != nil {
+	if err := saveTunConfig(ctx, application, kind, settings); err != nil {
 		printLine(cmd.OutOrStdout(), "warning: could not persist TUN settings: %v", err)
 	}
-	if err := saveTrafficMode(application.Paths, network.ModeTUN); err != nil {
+	if err := saveTrafficMode(ctx, application, network.ModeTUN); err != nil {
 		printLine(cmd.OutOrStdout(), "warning: could not persist the traffic mode: %v", err)
 	}
 	out := cmd.OutOrStdout()
@@ -357,7 +353,7 @@ func runTUNDisable(cmd *cobra.Command) error {
 	}
 	if result.Released {
 		printLine(out, "TUN disabled; core resources released")
-		if err := saveTrafficMode(application.Paths, network.ModeOff); err != nil {
+		if err := saveTrafficMode(ctx, application, network.ModeOff); err != nil {
 			printLine(out, "warning: could not persist the traffic mode: %v", err)
 		}
 	} else {
@@ -449,17 +445,14 @@ func tunSettingsFromFlags(cmd *cobra.Command, application *app.Frontend) (model.
 	return kind, settings, nil
 }
 
-func saveTunConfig(application *app.Frontend, kind model.CoreKind, settings tun.Settings) error {
-	current, err := storage.LoadSettings(application.Paths)
-	if err != nil {
-		return err
-	}
+func saveTunConfig(ctx context.Context, application *app.Frontend, kind model.CoreKind, settings tun.Settings) error {
+	current := application.SettingsSnapshot(ctx)
 	current.TunCore = string(kind)
 	current.TunStack = string(settings.Stack)
 	current.TunMTU = settings.MTU
 	current.TunDNSHijack = settings.DNSHijack
 	current.TunIPv6 = settings.IPv6
-	return storage.SaveSettings(application.Paths, current)
+	return application.SaveSettings(ctx, current)
 }
 
 func runNetworkStatus(cmd *cobra.Command) error {
@@ -473,10 +466,7 @@ func runNetworkStatus(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	settings, err := storage.LoadSettings(application.Paths)
-	if err != nil {
-		return err
-	}
+	settings := application.SettingsSnapshot(ctx)
 
 	out := cmd.OutOrStdout()
 	printLine(out, "platform: %s", report.Capabilities.Platform)

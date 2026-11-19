@@ -20,9 +20,11 @@ import (
 type fakeFacade struct {
 	active int32
 	max    int32
+	calls  int32
 }
 
 func (f *fakeFacade) CoreRestart(ctx context.Context) error {
+	atomic.AddInt32(&f.calls, 1)
 	current := atomic.AddInt32(&f.active, 1)
 	for {
 		observed := atomic.LoadInt32(&f.max)
@@ -289,6 +291,39 @@ func TestFacadeCallsAreSerialized(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&facade.max); got != 1 {
 		t.Fatalf("concurrent facade mutations observed: max=%d", got)
+	}
+}
+
+func TestOperationIDDeduplicates(t *testing.T) {
+	paths := testPaths(t)
+	backend := newFakeBackend()
+	facade := &fakeFacade{}
+	backend.facade = facade
+	endpoint, cancel, done := startServer(t, paths, backend)
+	defer func() {
+		cancel()
+		<-done
+	}()
+	client, err := ipc.Dial(context.Background(), endpoint, time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	call := func(opID string) {
+		t.Helper()
+		payload := map[string]any{"method": "CoreRestart"}
+		if err := client.CallWithOperationID(context.Background(), ipc.OpAppCall, payload, nil, opID); err != nil {
+			t.Fatalf("call %s: %v", opID, err)
+		}
+	}
+	call("op-1")
+	call("op-1")
+	if got := atomic.LoadInt32(&facade.calls); got != 1 {
+		t.Fatalf("duplicate operation executed %d times", got)
+	}
+	call("op-2")
+	if got := atomic.LoadInt32(&facade.calls); got != 2 {
+		t.Fatalf("distinct operation executed %d times", got)
 	}
 }
 

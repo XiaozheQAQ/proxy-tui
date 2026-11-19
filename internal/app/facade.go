@@ -35,6 +35,14 @@ func (f *Facade) ConfigInfo() ConfigInfo {
 	return ConfigInfo{Paths: f.app.Paths, Settings: f.app.Settings}
 }
 
+func (f *Facade) SettingsSnapshot(ctx context.Context) storage.Settings {
+	return f.app.SettingsSnapshot(ctx)
+}
+
+func (f *Facade) UpdateSettings(ctx context.Context, settings storage.Settings) error {
+	return f.app.UpdateSettings(ctx, settings)
+}
+
 func (f *Facade) CoreKinds() []model.CoreKind { return f.app.Cores.Kinds() }
 func (f *Facade) CoreStatus(ctx context.Context, kind model.CoreKind) core.Status {
 	return f.app.Cores.Status(ctx, kind)

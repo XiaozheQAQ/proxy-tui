@@ -226,6 +226,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case settingsSavedMsg:
 		if typed.err != nil {
 			m.notice("error", "save settings: %s", typed.err.Error())
+		} else {
+			m.app.Settings = m.settings
 		}
 		return m, nil
 
@@ -747,10 +749,12 @@ func (m *Model) autoUpdateCmd() tea.Cmd {
 }
 
 func (m *Model) saveSettings() tea.Cmd {
-	paths := m.app.Paths
+	application := m.app
 	settings := m.settings
 	return func() tea.Msg {
-		return settingsSavedMsg{err: storage.SaveSettings(paths, settings)}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		return settingsSavedMsg{err: application.SaveSettings(ctx, settings)}
 	}
 }
 

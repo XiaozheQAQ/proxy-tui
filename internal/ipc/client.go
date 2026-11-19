@@ -40,11 +40,17 @@ func (c *Client) Close() error { return c.conn.Close() }
 
 // Call performs one request/response round trip.
 func (c *Client) Call(ctx context.Context, operation string, payload any, out any) error {
+	return c.CallWithOperationID(ctx, operation, payload, out, "")
+}
+
+// CallWithOperationID attaches a stable operation ID so a retry after a lost
+// response cannot execute the mutation twice.
+func (c *Client) CallWithOperationID(ctx context.Context, operation string, payload any, out any, operationID string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	id := fmt.Sprintf("req-%d", c.sequence.Add(1))
-	request := Request{Version: Version, RequestID: id, Operation: operation}
+	request := Request{Version: Version, RequestID: id, OperationID: operationID, Operation: operation}
 	if payload != nil {
 		data, err := marshal(payload)
 		if err != nil {

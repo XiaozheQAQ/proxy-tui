@@ -51,10 +51,11 @@ const (
 
 // Request is one RPC request.
 type Request struct {
-	Version   int             `json:"version"`
-	RequestID string          `json:"request_id"`
-	Operation string          `json:"operation"`
-	Payload   json.RawMessage `json:"payload,omitempty"`
+	Version     int             `json:"version"`
+	RequestID   string          `json:"request_id"`
+	OperationID string          `json:"operation_id,omitempty"`
+	Operation   string          `json:"operation"`
+	Payload     json.RawMessage `json:"payload,omitempty"`
 }
 
 // Response is one RPC response.

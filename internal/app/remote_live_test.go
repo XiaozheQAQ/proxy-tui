@@ -42,6 +42,35 @@ func TestLiveRemoteFrontend(t *testing.T) {
 	if len(kinds) == 0 {
 		t.Fatal("no cores reported")
 	}
+	settings := frontend.SettingsSnapshot(ctx)
+	original := settings
+	if settings.Theme == "dark" {
+		settings.Theme = "light"
+	} else {
+		settings.Theme = "dark"
+	}
+	if err := frontend.SaveSettings(ctx, settings); err != nil {
+		t.Fatalf("save settings through supervisor: %v", err)
+	}
+	secondClient, err := ipc.Dial(ctx, ipc.EndpointPath(paths.RuntimeDir()), 5*time.Second)
+	if err != nil {
+		t.Fatalf("second dial: %v", err)
+	}
+	second, err := NewRemote(ctx, secondClient)
+	if err != nil {
+		_ = secondClient.Close()
+		t.Fatalf("second remote: %v", err)
+	}
+	if got := second.SettingsSnapshot(ctx).Theme; got != settings.Theme {
+		_ = secondClient.Close()
+		t.Fatalf("second client saw theme %q, want %q", got, settings.Theme)
+	}
+	_ = secondClient.Close()
+	if err := frontend.SaveSettings(ctx, original); err != nil {
+		t.Fatalf("restore settings: %v", err)
+	}
+	t.Logf("shared settings visible across clients: theme=%s", settings.Theme)
+
 	profiles := frontend.Subs.List()
 	t.Logf("remote profiles=%d", len(profiles))
 	if len(profiles) == 0 {

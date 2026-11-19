@@ -59,7 +59,21 @@ type handler struct {
 	cancel   context.CancelFunc
 
 	mutation sync.Mutex
+
+	cacheMu sync.Mutex
+	cache   map[string]cacheEntry
 }
+
+type cacheEntry struct {
+	operation string
+	response  ipc.Response
+	storedAt  time.Time
+}
+
+const (
+	operationCacheTTL = 5 * time.Minute
+	operationCacheMax = 256
+)
 
 // NewHandler builds the RPC handler.
 func NewHandler(backend Backend, endpoint, version, logPath string, cancel context.CancelFunc) ipc.Handler {
@@ -70,11 +84,21 @@ func NewHandler(backend Backend, endpoint, version, logPath string, cancel conte
 		started:  time.Now(),
 		logPath:  logPath,
 		cancel:   cancel,
+		cache:    map[string]cacheEntry{},
 	}
 	return h.handle
 }
 
 func (h *handler) handle(ctx context.Context, request ipc.Request) ipc.Response {
+	if cached, ok := h.lookupOperation(request); ok {
+		return cached
+	}
+	response := h.dispatch(ctx, request)
+	h.storeOperation(request, response)
+	return response
+}
+
+func (h *handler) dispatch(ctx context.Context, request ipc.Request) ipc.Response {
 	switch request.Operation {
 	case ipc.OpPing:
 		return okResponse(request, map[string]string{"status": "ok"})
@@ -259,7 +283,8 @@ func isFacadeMutation(method string) bool {
 	switch method {
 	case "CoreInstall", "CoreStart", "CoreStop", "CoreRestart", "CoreSelect",
 		"SubsSetActive", "SubsDelete", "SubsUpdate", "SubsUpdateAll", "SubsSetDefaultInterval",
-		"LogsClear", "Import", "ApplyTrafficMode", "RecoverTUN", "RecoverNetwork", "TUNDisable":
+		"UpdateSettings", "LogsClear", "Import", "ApplyTrafficMode", "RecoverTUN",
+		"RecoverNetwork", "TUNDisable":
 		return true
 	}
 	return false
@@ -281,6 +306,57 @@ func (h *handler) logs(ctx context.Context, request ipc.Request) ipc.Response {
 		return okResponse(request, LogsPayload{Path: h.logPath, Entries: []logging.Entry{}})
 	}
 	return okResponse(request, LogsPayload{Entries: h.backend.LogsTail(limit), Path: h.logPath})
+}
+
+func (h *handler) lookupOperation(request ipc.Request) (ipc.Response, bool) {
+	if request.OperationID == "" {
+		return ipc.Response{}, false
+	}
+	h.cacheMu.Lock()
+	defer h.cacheMu.Unlock()
+	entry, ok := h.cache[request.OperationID]
+	if !ok || time.Since(entry.storedAt) > operationCacheTTL || entry.operation != request.Operation {
+		return ipc.Response{}, false
+	}
+	cached := entry.response
+	cached.RequestID = request.RequestID
+	return cached, true
+}
+
+func (h *handler) storeOperation(request ipc.Request, response ipc.Response) {
+	if request.OperationID == "" || !h.isMutationRequest(request) {
+		return
+	}
+	h.cacheMu.Lock()
+	defer h.cacheMu.Unlock()
+	if len(h.cache) >= operationCacheMax {
+		for id, entry := range h.cache {
+			if time.Since(entry.storedAt) > operationCacheTTL {
+				delete(h.cache, id)
+			}
+		}
+		for id := range h.cache {
+			if len(h.cache) < operationCacheMax {
+				break
+			}
+			delete(h.cache, id)
+		}
+	}
+	h.cache[request.OperationID] = cacheEntry{operation: request.Operation, response: response, storedAt: time.Now()}
+}
+
+func (h *handler) isMutationRequest(request ipc.Request) bool {
+	switch request.Operation {
+	case ipc.OpCoreStart, ipc.OpCoreStop, ipc.OpCoreRestart, ipc.OpProxySelect:
+		return true
+	case ipc.OpAppCall:
+		var payload app.AppCallPayload
+		if err := decode(request, &payload); err != nil {
+			return false
+		}
+		return isFacadeMutation(payload.Method)
+	}
+	return false
 }
 
 func okResponse(request ipc.Request, payload any) ipc.Response {

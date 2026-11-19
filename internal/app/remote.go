@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/proxytui/proxy-tui/internal/core"
@@ -23,8 +25,13 @@ type AppCallPayload struct {
 }
 
 type remote struct {
-	client *ipc.Client
+	mu       sync.Mutex
+	client   *ipc.Client
+	endpoint string
+	sequence atomic.Uint64
 }
+
+var reconnectDelays = []time.Duration{1 * time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second}
 
 // NewRemote builds a frontend backed by the supervisor IPC connection.
 func NewRemote(ctx context.Context, client *ipc.Client) (*Frontend, error) {
@@ -33,6 +40,7 @@ func NewRemote(ctx context.Context, client *ipc.Client) (*Frontend, error) {
 	if err := r.invoke(ctx, "ConfigInfo", nil, &info); err != nil {
 		return nil, err
 	}
+	r.endpoint = ipc.EndpointPath(info.Paths.RuntimeDir())
 	frontend := &Frontend{
 		Cores:    &remoteCores{r: r},
 		Subs:     &remoteSubs{r: r},
@@ -54,14 +62,68 @@ func (r *remote) invoke(ctx context.Context, method string, args []any, out any)
 		}
 		rawArgs = append(rawArgs, data)
 	}
-	var result json.RawMessage
-	if err := r.client.Call(ctx, ipc.OpAppCall, AppCallPayload{Method: method, Args: rawArgs}, &result); err != nil {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	operationID := ""
+	if isRemoteMutation(method) {
+		operationID = fmt.Sprintf("op-%d-%d", time.Now().UnixNano(), r.sequence.Add(1))
+	}
+	var lastErr error
+	for attempt := 0; attempt <= len(reconnectDelays); attempt++ {
+		if attempt > 0 {
+			delay := reconnectDelays[attempt-1]
+			if deadline, ok := ctx.Deadline(); ok && time.Now().Add(delay).After(deadline) {
+				return lastErr
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(delay):
+			}
+			if err := r.reconnect(ctx); err != nil {
+				lastErr = err
+				continue
+			}
+		}
+		var result json.RawMessage
+		err := r.client.CallWithOperationID(ctx, ipc.OpAppCall, AppCallPayload{Method: method, Args: rawArgs}, &result, operationID)
+		if err == nil {
+			if out == nil || len(result) == 0 {
+				return nil
+			}
+			return json.Unmarshal(result, out)
+		}
+		if _, definitive := err.(*ipc.RPCError); definitive {
+			return err
+		}
+		lastErr = err
+		_ = r.client.Close()
+	}
+	return lastErr
+}
+
+func (r *remote) reconnect(ctx context.Context) error {
+	if r.endpoint == "" {
+		return fmt.Errorf("supervisor endpoint unknown")
+	}
+	client, err := ipc.Dial(ctx, r.endpoint, 30*time.Second)
+	if err != nil {
 		return err
 	}
-	if out == nil || len(result) == 0 {
-		return nil
+	r.client = client
+	return nil
+}
+
+func isRemoteMutation(method string) bool {
+	switch method {
+	case "CoreInstall", "CoreStart", "CoreStop", "CoreRestart", "CoreSelect",
+		"SubsSetActive", "SubsDelete", "SubsUpdate", "SubsUpdateAll", "SubsSetDefaultInterval",
+		"UpdateSettings", "LogsClear", "Import", "ApplyTrafficMode", "RecoverTUN",
+		"RecoverNetwork", "TUNDisable":
+		return true
 	}
-	return json.Unmarshal(result, out)
+	return false
 }
 
 func callContext() (context.Context, context.CancelFunc) {
@@ -285,6 +347,14 @@ func (a *remoteAPI) VerifyProxyConnectivity(ctx context.Context) ProxyConnectivi
 }
 func (a *remoteAPI) Health(ctx context.Context) error {
 	return a.r.invoke(ctx, "Ping", nil, nil)
+}
+func (a *remoteAPI) SettingsSnapshot(ctx context.Context) storage.Settings {
+	var out storage.Settings
+	_ = a.r.invoke(ctx, "SettingsSnapshot", nil, &out)
+	return out
+}
+func (a *remoteAPI) UpdateSettings(ctx context.Context, settings storage.Settings) error {
+	return a.r.invoke(ctx, "UpdateSettings", []any{settings}, nil)
 }
 func (a *remoteAPI) CoreBinaryPath(kind model.CoreKind) string {
 	var out string
