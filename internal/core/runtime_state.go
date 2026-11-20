@@ -14,14 +14,18 @@ import (
 // RuntimeState is persisted when a core starts so a later process can detect
 // and stop a core that outlived the process which launched it.
 type RuntimeState struct {
-	Core       model.CoreKind `json:"core"`
-	PID        int            `json:"pid"`
-	APIAddr    string         `json:"api_addr"`
-	Secret     string         `json:"secret"`
-	ProxyPort  int            `json:"proxy_port"`
-	ConfigPath string         `json:"config_path"`
-	Version    string         `json:"version"`
-	StartedAt  time.Time      `json:"started_at"`
+	Core             model.CoreKind `json:"core"`
+	PID              int            `json:"pid"`
+	APIAddr          string         `json:"api_addr"`
+	Secret           string         `json:"secret"`
+	ProxyPort        int            `json:"proxy_port"`
+	ConfigPath       string         `json:"config_path"`
+	Version          string         `json:"version"`
+	StartedAt        time.Time      `json:"started_at"`
+	ProcessStartedAt time.Time      `json:"process_started_at,omitempty"`
+	BinaryPath       string         `json:"binary_path,omitempty"`
+	BinarySHA256     string         `json:"binary_sha256,omitempty"`
+	ConfigSHA256     string         `json:"config_sha256,omitempty"`
 }
 
 // StatePath is where a core's runtime state is stored.

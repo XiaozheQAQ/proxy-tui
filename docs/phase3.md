@@ -2,14 +2,14 @@
 
 Phase 3 turns ProxyTUI from "a TUI that can run a core" into "a client that owns the
 machine's traffic". It is split into four sub-phases; **3A, 3B and the first 3C slice are
-implemented**, 3D is designed but not built.
+implemented**, and 3D.1/3D.2 (supervisor and client migration) are implemented.
 
 | Sub-phase | Scope | State |
 |---|---|---|
 | 3A | Unified network state manager: snapshot, transaction, rollback, recovery | implemented |
 | 3B | Desktop system proxy: Windows WinINet, macOS networksetup, Linux GNOME GSettings | implemented |
 | 3C | Core-native TUN: config rendering, preflight, lifecycle, recovery | implemented, activation needs Administrator/root |
-| 3D | Proxy Supervisor: autostart, IPC, crash recovery | not implemented |
+| 3D | Proxy Supervisor: IPC, crash recovery (autostart 3D.4 not started) | implemented; external evidence pending |
 
 ## Traffic takeover modes
 
@@ -220,17 +220,18 @@ clients produced exactly one core start.
 
 TUI and CLI now use a remote `app.Frontend` through IPC; bare `proxy` and CLI commands
 ensure the supervisor, and the production paths have no local fallback. Unix peers are
-checked by UID; Windows uses a go-winio Named Pipe with a Logon-SID DACL (cross-SID test
+checked by UID; Windows uses a go-winio Named Pipe with a user-SID DACL (cross-user test
 still pending). Reconnect,
 multi-TUI live mutation tests, 3D.3 and 3D.4 remain open. See `docs/phase3d.md`.
 
-Today cores are children of the `proxy` process. A started core keeps running when the TUI
-exits and a later process can adopt it through `<core>-state.json`. That is **cross-session
-process adoption, not IPC**: there is no socket, no daemon and no autostart.
+Cores are children of the supervisor process. A started core keeps running when the TUI
+exits and a later process can adopt it through `<core>-state.json` after verifying process
+start time, executable, binary/config digests and the API secret. That is process adoption,
+not a data-plane IPC.
 
-The Supervisor will be the same binary in an internal mode, exposing a Unix socket / named
-pipe with start/stop/status and autostart at login, plus core and network state recovery
-after reboot.
+The Supervisor is the same binary in an internal mode and exposes a per-user Unix socket or
+Named Pipe with start/stop/status, lifecycle state and core/network recovery. Autostart at
+login (3D.4) and a health monitor (3D.3) are not implemented.
 
 ## Acceptance criteria for Phase 3
 
@@ -238,7 +239,7 @@ after reboot.
 |---|---|---|
 | Enable system proxy | real desktop setting changes | verified on Windows (live) and Linux GNOME (real dconf) |
 | Disable system proxy | exact previous settings restored | verified on Windows (live) and Linux GNOME |
-| Enable TUN | real traffic passes through the core | **BLOCKED**: non-elevated session + existing third-party TUN; needs an authorized admin run |
+| Enable TUN | real traffic passes through the core | verified on Windows in the Phase 3C.5 elevated run; TUI Disable manual |
 | DNS takeover | DNS follows the configured policy | only config rendering verified |
 | IPv4 / IPv6 | no unintended leaks | pending real TUN run |
 | LAN access | follows the bypass policy | desktop proxy bypass verified; TUN pending |

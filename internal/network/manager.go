@@ -120,18 +120,24 @@ func (m *Manager) EnableSystemProxy(ctx context.Context, desired Desired) (Resul
 		}
 	}
 
+	rollbackSnapshot := snapshot
+	if hadBackup {
+		rollbackSnapshot = existing.Snapshot
+	}
 	rollback := func(cause error) (Result, error) {
-		if hadBackup {
-			return Result{Adapter: adapter.Name()}, cause
-		}
-		restoreErr := adapter.Restore(ctx, snapshot)
-		state, _ := adapter.GetState(ctx)
+		// The caller's context may already be cancelled (IPC deadline). The
+		// rollback must still get a bounded chance to restore the original
+		// desktop proxy.
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cleanupCancel()
+		restoreErr := m.restoreAndVerify(cleanupCtx, adapter, rollbackSnapshot)
+		state, _ := adapter.GetState(cleanupCtx)
 		entry := transactionJournal{
 			Phase:     phaseRolledBack,
 			Adapter:   adapter.Name(),
 			StartedAt: m.now(),
 			Desired:   desired,
-			Snapshot:  snapshot,
+			Snapshot:  rollbackSnapshot,
 			Error:     cause.Error(),
 		}
 		if writeErr := m.writeJournal(entry); writeErr != nil {
@@ -140,6 +146,11 @@ func (m *Manager) EnableSystemProxy(ctx context.Context, desired Desired) (Resul
 		if restoreErr != nil {
 			return Result{Adapter: adapter.Name(), State: state, RolledBack: false},
 				fmt.Errorf("apply desktop proxy failed: %w (rollback also failed: %v)", cause, restoreErr)
+		}
+		if hadBackup {
+			// The previous owned state was restored; the stale backup must
+			// not keep blocking supervisor stop.
+			_ = m.removeBackup()
 		}
 		m.logf("warn", "desktop proxy rolled back after failure: "+cause.Error())
 		return Result{Adapter: adapter.Name(), State: state, RolledBack: true}, cause
@@ -152,6 +163,18 @@ func (m *Manager) EnableSystemProxy(ctx context.Context, desired Desired) (Resul
 		return rollback(fmt.Errorf("desktop proxy did not take effect: %w", err))
 	}
 
+	// Mark the transaction as committing before the durable backup exists.
+	// If we crash after the backup, recovery treats it as committed; if we
+	// crash before it, recovery restores the original snapshot.
+	if err := m.writeJournal(transactionJournal{
+		Phase:     phaseCommitting,
+		Adapter:   adapter.Name(),
+		StartedAt: m.now(),
+		Desired:   desired,
+		Snapshot:  snapshot,
+	}); err != nil {
+		return Result{}, err
+	}
 	if hadBackup {
 		existing.Desired = desired
 		existing.At = m.now()
@@ -211,6 +234,14 @@ func (m *Manager) DisableSystemProxy(ctx context.Context) (Result, error) {
 	if adapter == nil {
 		return Result{}, fmt.Errorf("the desktop proxy was changed by %q, which is unavailable on this platform", backup.Adapter)
 	}
+	current, err := adapter.GetState(ctx)
+	if err != nil {
+		return Result{Adapter: adapter.Name()}, fmt.Errorf("read desktop proxy before restore: %w", err)
+	}
+	if current.Enabled && current.Address() != backup.Desired.Address() {
+		return Result{Adapter: adapter.Name(), State: current},
+			fmt.Errorf("desktop proxy is no longer owned by proxy-tui (current=%s, expected=%s); refusing to overwrite it", current.Address(), backup.Desired.Address())
+	}
 	if err := m.writeJournal(transactionJournal{
 		Phase:     phaseRestoring,
 		Adapter:   adapter.Name(),
@@ -219,12 +250,14 @@ func (m *Manager) DisableSystemProxy(ctx context.Context) (Result, error) {
 	}); err != nil {
 		return Result{}, err
 	}
-	if err := adapter.Restore(ctx, backup.Snapshot); err != nil {
+	if err := m.restoreAndVerify(ctx, adapter, backup.Snapshot); err != nil {
+		// Keep journal and backup: an unverified restore must never discard
+		// the only copy of the user's original settings.
 		return Result{Adapter: adapter.Name()}, fmt.Errorf("restore original desktop proxy settings: %w", err)
 	}
 	state, stateErr := adapter.GetState(ctx)
 	if stateErr != nil {
-		m.logf("warn", "read desktop proxy after restore: "+stateErr.Error())
+		state = backup.Snapshot.Proxy
 	}
 	if err := m.removeJournal(); err != nil {
 		m.logf("warn", "remove network journal: "+err.Error())
@@ -291,13 +324,23 @@ func (m *Manager) Report(ctx context.Context, ownAddress string) (Report, error)
 		}
 	}
 	if backup, backupErr := m.readBackup(); backupErr == nil && backup != nil {
-		report.Mode = ModeSystemProxy
-		report.BackupActive = true
 		report.BackupAt = backup.At
 		report.BackupOriginal = backup.Original
+		if _, stateErr := adapter.GetState(ctx); stateErr != nil {
+			// Ownership cannot be disproved; keep the stop guard active.
+			report.Mode = ModeSystemProxy
+			report.BackupActive = true
+			report.Notes = append(report.Notes, "desktop proxy state unavailable; backup ownership is retained")
+		} else if !report.Desktop.Enabled || report.Desktop.Address() != backup.Desired.Address() {
+			report.BackupStale = true
+			report.Notes = append(report.Notes, "a stale desktop proxy backup is kept for inspection but is not owned by proxy-tui")
+		} else {
+			report.Mode = ModeSystemProxy
+			report.BackupActive = true
+		}
 	}
 	if !TUNAvailable() {
-		report.Notes = append(report.Notes, "TUN is provided by the proxy core (Phase 3C)")
+		report.Notes = append(report.Notes, "TUN is unavailable in this build")
 	}
 	return report, nil
 }
@@ -315,25 +358,42 @@ func (m *Manager) Recover(ctx context.Context, coreRunning bool) (RecoveryResult
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	backup, backupErr := m.readBackup()
+	if backupErr != nil {
+		return RecoveryResult{}, backupErr
+	}
+
 	if entry, ok := m.readJournal(); ok {
 		adapter := m.adapterByName(entry.Adapter)
 		if adapter == nil {
 			return RecoveryResult{}, fmt.Errorf("journal references unknown adapter %q", entry.Adapter)
 		}
-		if err := adapter.Restore(ctx, entry.Snapshot); err != nil {
+		switch entry.Phase {
+		case phaseRolledBack:
+			_ = m.removeJournal()
+			return RecoveryResult{Action: "cleared a completed rollback journal", Restored: true}, nil
+		case phaseCommitting:
+			if backup != nil {
+				// The backup was written after the apply was verified; this is
+				// a committed enable, not an interrupted one. Never roll it
+				// back just because the journal removal crashed.
+				_ = m.removeJournal()
+				return RecoveryResult{Action: "completed an interrupted network commit", Restored: true}, nil
+			}
+		}
+		if err := m.restoreAndVerify(ctx, adapter, entry.Snapshot); err != nil {
 			return RecoveryResult{}, fmt.Errorf("recover interrupted network change: %w", err)
 		}
 		if err := m.removeJournal(); err != nil {
 			m.logf("warn", "remove network journal: "+err.Error())
 		}
+		// The original snapshot is authoritative after a successful restore;
+		// do not leave a backup that would block supervisor stop forever.
+		_ = m.removeBackup()
 		m.logf("warn", "restored network state after an interrupted change")
 		return RecoveryResult{Action: "restored an interrupted network change", Restored: true}, nil
 	}
 
-	backup, err := m.readBackup()
-	if err != nil {
-		return RecoveryResult{}, err
-	}
 	if backup == nil {
 		return RecoveryResult{}, nil
 	}
@@ -356,13 +416,14 @@ func (m *Manager) Recover(ctx context.Context, coreRunning bool) (RecoveryResult
 	if !current.Enabled || current.Address() != wanted {
 		// Another program changed the proxy after ProxyTUI applied its own; the
 		// backup is stale and restoring it would overwrite someone else's
-		// settings. Leave the current state untouched.
+		// settings. Keep the file for manual inspection but do not report an
+		// active ownership that would block supervisor stop.
 		return RecoveryResult{
 			Action: "desktop proxy is no longer managed by proxy-tui",
 			Detail: fmt.Sprintf("current=%s, backup=%s: leaving the current settings untouched", emptyOr(current.Address(), "disabled"), wanted),
 		}, nil
 	}
-	if err := adapter.Restore(ctx, backup.Snapshot); err != nil {
+	if err := m.restoreAndVerify(ctx, adapter, backup.Snapshot); err != nil {
 		return RecoveryResult{}, fmt.Errorf("restore desktop proxy after core stop: %w", err)
 	}
 	if err := m.removeBackup(); err != nil {
@@ -370,6 +431,35 @@ func (m *Manager) Recover(ctx context.Context, coreRunning bool) (RecoveryResult
 	}
 	m.logf("warn", "restored desktop proxy after the core stopped")
 	return RecoveryResult{Action: "restored the desktop proxy after the core stopped", Restored: true}, nil
+}
+
+func (m *Manager) restoreAndVerify(ctx context.Context, adapter Adapter, snapshot Snapshot) error {
+	if err := adapter.Restore(ctx, snapshot); err != nil {
+		return err
+	}
+	state, err := adapter.GetState(ctx)
+	if err != nil {
+		return fmt.Errorf("verify restored desktop proxy: %w", err)
+	}
+	if !sameProxyState(state, snapshot.Proxy) {
+		return fmt.Errorf("restored desktop proxy does not match the original snapshot (want %+v, got %+v)", snapshot.Proxy, state)
+	}
+	return nil
+}
+
+func sameProxyState(a, b ProxyState) bool {
+	if a.Enabled != b.Enabled || a.Protocol != b.Protocol || a.Host != b.Host || a.Port != b.Port || a.Bypass != b.Bypass {
+		return false
+	}
+	if len(a.Services) != len(b.Services) {
+		return false
+	}
+	for i := range a.Services {
+		if a.Services[i] != b.Services[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // Ensure errors.Is works for callers that only care about the class.

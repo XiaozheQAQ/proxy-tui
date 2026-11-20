@@ -36,6 +36,7 @@ type Status struct {
 	Version    string
 	BinaryPath string
 	Running    bool
+	Degraded   bool
 	PID        int
 	StartedAt  time.Time
 	ConfigPath string
@@ -46,6 +47,10 @@ type Status struct {
 // Label renders a compact status for the header bar.
 func (s Status) Label() string {
 	switch {
+	case s.Degraded && s.Running:
+		return "DEGRADED"
+	case s.Degraded:
+		return "UNKNOWN"
 	case s.Running:
 		return "RUNNING"
 	case s.Installed:

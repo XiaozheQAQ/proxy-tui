@@ -5,6 +5,7 @@ package ipc
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -147,6 +148,15 @@ func TestUnixStaleSocketRecovery(t *testing.T) {
 		t.Fatalf("Listen after stale socket: %v", err)
 	}
 	defer func() { _ = listener2.Close() }()
+}
+
+func TestUnixPeerRejectsNonUnixConnection(t *testing.T) {
+	left, right := net.Pipe()
+	defer func() { _ = left.Close() }()
+	defer func() { _ = right.Close() }()
+	if err := verifyPeer(left); err == nil {
+		t.Fatal("verifyPeer accepted a non-Unix connection")
+	}
 }
 
 var _ = fmt.Sprintf

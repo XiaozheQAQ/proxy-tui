@@ -1,5 +1,5 @@
 BINARY  := proxy
-VERSION ?= 0.1.0-dev
+VERSION ?= 0.2.0-dev
 LDFLAGS := -s -w -X github.com/proxytui/proxy-tui/internal/app.Version=$(VERSION)
 GO      ?= go
 

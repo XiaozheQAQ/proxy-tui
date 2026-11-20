@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -194,13 +195,18 @@ func emptyOr(value, fallback string) string {
 }
 
 func appTunSettings(application *app.Frontend) tun.Settings {
-	return app.TunSettingsFrom(application.Settings)
+	return app.TunSettingsFrom(application.SettingsSnapshot(context.Background()))
+}
+
+func patchValue(value any) json.RawMessage {
+	data, _ := json.Marshal(value)
+	return data
 }
 
 func saveTrafficMode(ctx context.Context, application *app.Frontend, mode network.Mode) error {
-	settings := application.SettingsSnapshot(ctx)
-	settings.TrafficMode = string(mode)
-	return application.SaveSettings(ctx, settings)
+	return application.PatchSettings(ctx, map[string]json.RawMessage{
+		"traffic_mode": patchValue(string(mode)),
+	})
 }
 
 func newNetworkTunCommand() *cobra.Command {
@@ -291,7 +297,7 @@ func runTUNStatus(cmd *cobra.Command) error {
 	out := cmd.OutOrStdout()
 	printLine(out, "platform: %s", application.TunPlatform())
 	printTUNStatus(out, status)
-	settings := app.TunSettingsFrom(application.Settings)
+	settings := app.TunSettingsFrom(application.SettingsSnapshot(ctx))
 	printLine(out, "settings: stack=%s mtu=%d dns-hijack=%v ipv6=%v", settings.Stack.Display(), settings.MTU, settings.DNSHijack, settings.IPv6)
 	for _, warning := range status.Leftover {
 		printLine(out, "warning: interface %s was not released; run proxy network tun recover", warning)
@@ -411,7 +417,7 @@ func runTUNRecover(cmd *cobra.Command) error {
 }
 
 func tunSettingsFromFlags(cmd *cobra.Command, application *app.Frontend) (model.CoreKind, tun.Settings, error) {
-	settings := app.TunSettingsFrom(application.Settings)
+	settings := app.TunSettingsFrom(application.SettingsSnapshot(cmd.Context()))
 	kind := application.DefaultTunCore(context.Background())
 	if raw, err := cmd.Flags().GetString("core"); err == nil && strings.TrimSpace(raw) != "" {
 		parsed, parseErr := model.ParseCoreKind(raw)
@@ -446,13 +452,13 @@ func tunSettingsFromFlags(cmd *cobra.Command, application *app.Frontend) (model.
 }
 
 func saveTunConfig(ctx context.Context, application *app.Frontend, kind model.CoreKind, settings tun.Settings) error {
-	current := application.SettingsSnapshot(ctx)
-	current.TunCore = string(kind)
-	current.TunStack = string(settings.Stack)
-	current.TunMTU = settings.MTU
-	current.TunDNSHijack = settings.DNSHijack
-	current.TunIPv6 = settings.IPv6
-	return application.SaveSettings(ctx, current)
+	return application.PatchSettings(ctx, map[string]json.RawMessage{
+		"tun_core":       patchValue(string(kind)),
+		"tun_stack":      patchValue(string(settings.Stack)),
+		"tun_mtu":        patchValue(settings.MTU),
+		"tun_dns_hijack": patchValue(settings.DNSHijack),
+		"tun_ipv6":       patchValue(settings.IPv6),
+	})
 }
 
 func runNetworkStatus(cmd *cobra.Command) error {

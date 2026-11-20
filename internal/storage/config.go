@@ -48,7 +48,7 @@ func DefaultSettings() Settings {
 		AutoUpdate:            true,
 		UpdateIntervalSeconds: 12 * 60 * 60,
 		CheckCoreUpdates:      true,
-		SubscriptionUserAgent: "clash.meta/v1.19.0 proxy-tui/0.1.0",
+		SubscriptionUserAgent: "clash.meta/v1.19.0 proxy-tui/0.2.0",
 		ConfirmQuit:           false,
 		TrafficMode:           "off",
 		TunCore:               "mihomo",

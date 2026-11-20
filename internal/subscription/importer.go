@@ -64,7 +64,7 @@ func (m *Manager) Import(ctx context.Context, req ImportRequest) ([]ImportOutcom
 	for _, rawURL := range urls {
 		endpoint, err := NormalizeSubscriptionURL(rawURL)
 		if err != nil {
-			outcomes = append(outcomes, ImportOutcome{Source: security.RedactURL(rawURL), Err: err})
+			outcomes = append(outcomes, ImportOutcome{Source: security.RedactURL(rawURL), Err: fmt.Errorf("%s", security.Redact(err.Error()))})
 			continue
 		}
 		if !req.AllowDuplicate {

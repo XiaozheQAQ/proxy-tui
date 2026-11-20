@@ -58,6 +58,10 @@ func LoadLifecycle(paths storage.Paths) (*LifecycleRecord, error) {
 	return &record, nil
 }
 
+// ErrLifecycleOwnedByOther is returned when a stopping old supervisor tries
+// to overwrite the record of its replacement.
+var ErrLifecycleOwnedByOther = errors.New("supervisor lifecycle is owned by another instance")
+
 // SaveLifecycle writes the record atomically.
 func SaveLifecycle(paths storage.Paths, record LifecycleRecord) error {
 	if err := os.MkdirAll(paths.RuntimeDir(), 0o700); err != nil {
@@ -65,4 +69,18 @@ func SaveLifecycle(paths storage.Paths, record LifecycleRecord) error {
 	}
 	record.UpdatedAt = time.Now()
 	return storage.WriteJSONAtomic(LifecyclePath(paths), record, 0o600)
+}
+
+// SaveLifecycleOwner writes only if the record still belongs to this
+// instance. It prevents a delayed shutdown write from clobbering a newer
+// supervisor's RUNNING record.
+func SaveLifecycleOwner(paths storage.Paths, record LifecycleRecord) error {
+	existing, err := LoadLifecycle(paths)
+	if err != nil {
+		return err
+	}
+	if existing != nil && existing.InstanceID != "" && existing.InstanceID != record.InstanceID {
+		return fmt.Errorf("%w: current=%s writer=%s", ErrLifecycleOwnedByOther, existing.InstanceID, record.InstanceID)
+	}
+	return SaveLifecycle(paths, record)
 }

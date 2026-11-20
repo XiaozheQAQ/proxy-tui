@@ -7,7 +7,7 @@ exercised, or explicitly marked as not implemented.
 
 | Feature | Windows | Linux | macOS |
 |---|---|---|---|
-| TUI, subscription import | yes | yes | yes (built; TUI tests run on all OS in CI) |
+| TUI, subscription import | yes | yes | yes (built; TUI unit tests are platform-independent, native CI NOT RUN) |
 | Core install / start / stop | yes | yes | yes (built) |
 | Proxy groups, node switch, latency | yes | yes | yes (built) |
 | Connections and throughput | yes | yes | yes (built) |
@@ -15,10 +15,10 @@ exercised, or explicitly marked as not implemented.
 | Desktop system proxy | yes (WinINet) | yes (GNOME GSettings) | yes (networksetup) |
 | System proxy backup / restore / recovery | yes | yes | yes (built) |
 | Foreign proxy conflict detection | yes | yes | yes (built) |
-| Core-native TUN (render + preflight + lifecycle) | preflight/config validation PASS; activation BLOCKED (needs Administrator) | needs root (WSL-tested) | built, unverified on real hardware |
+| Core-native TUN (render + preflight + lifecycle) | real activation PASS in the Phase 3C.5 Windows run; TUI-driven Disable still manual | needs root (WSL preflight only) | built, unverified on real hardware |
 | TUN real traffic / DNS hijack / leak tests | not verified (non-elevated session) | not verified (WSL only) | not verified |
 | Autostart / service install | — | — | — |
-| Proxy Supervisor + IPC | — | — | — |
+| Proxy Supervisor + IPC | yes (Named Pipe, per-user SID) | yes (Unix socket + SO_PEERCRED) | yes (Unix socket + LOCAL_PEERCRED) |
 
 Legend: yes = implemented and verified as described under "Verification"; — = planned.
 
@@ -69,19 +69,20 @@ result.
 
 | Item | Windows | Linux | macOS |
 |---|---|---|---|
-| Supervisor process | yes (detached, per user) | yes (setsid, per user) | yes (setsid, per user) |
+| Supervisor process | yes (detached, per user; endpoint includes runtime-dir hash) | yes (setsid, per user) | yes (setsid, per user) |
 | IPC transport | Named Pipe (go-winio v0.6.2) | Unix socket 0600 | Unix socket 0600 |
-| Named Pipe / SID ACL | Logon-SID DACL, remote clients rejected; cross-SID NOT TESTED | n/a | n/a |
+| Named Pipe / SID ACL | user-SID DACL, remote clients rejected; cross-user NOT TESTED | n/a | n/a |
 | Single instance | atomic socket bind | atomic socket bind | atomic socket bind |
-| Peer authentication | Logon-SID DACL (kernel) | yes (SO_PEERCRED) | yes (LOCAL_PEERCRED) |
+| Peer authentication | user-SID DACL (kernel) | yes (SO_PEERCRED) | yes (LOCAL_PEERCRED) |
 | Shared settings writes | supervisor IPC | supervisor IPC | supervisor IPC |
 | Operation dedupe / reconnect | yes / bounded retransport | yes / bounded | yes / bounded |
 | TUI/CLI over IPC | yes (Named Pipe, Windows live-verified) | yes (compiled, not live-run) | yes (compiled, not live-run) |
 
 The supervisor and IPC are compiled and natively tested on Windows, including Named Pipe
-lifecycle and live Supervisor/TUI/CLI checks. Cross-SID denial is NOT TESTED. Linux/macOS
+lifecycle and live Supervisor/TUI/CLI checks. Cross-user denial is NOT TESTED. Linux/macOS
 builds pass and peer credential checks are implemented, but the transport has not been run
-natively on those hosts.
+natively on those hosts. The default endpoint is per-user (user-SID DACL); an explicit
+PROXY_TUI_HOME adds a runtime-directory suffix so portable homes/tests do not share a pipe.
 
 ## Proxy selection support
 
@@ -117,16 +118,14 @@ Real runs performed for this iteration:
     refused, and the machine was left byte-identical.
   * `go test ./...` passes, including the Windows-only registry tests.
   * TUN: rendered configs for Mihomo 1.19.34 and sing-box 1.14.4 are accepted by the real
-    binaries (`mihomo -t`, `sing-box check`). Preflight on the real host correctly reports
-    BLOCKED privileges, warns about the existing `xray_tun` adapter and that the default route
-    already goes through it. `network tun enable` stops at the privilege check: no TUN state
-    is written, no core starts, the desktop proxy stays untouched.
-  * **Real TUN activation is not verified**: it requires an elevated terminal and would
-    change this machine's routing while another TUN client is active.
-  * Windows acceptance run (Phase 3C.5, 2026-11-18): preflight PASS for both cores,
-    real-binary TUN config validation PASS, blocked enable produced no state/core/proxy
-    changes, forged-state recovery refused to touch `xray_tun` or any core process.
-    Activation remains BLOCKED pending an elevated, explicitly authorized run.
+    binaries (`mihomo -t`, `sing-box check`). A non-elevated/conflicted host correctly
+    reports BLOCKED and performs no state/core/proxy changes.
+  * Windows acceptance run (Phase 3C.5, 2026-11-18) then activated TUN for both cores in an
+    elevated, explicitly authorized session: adapter/default route/IPv4/TCP/UDP DNS/LAN
+    passed, stop released the interfaces, and a killed core was recovered on the next run.
+    IPv6 and QUIC were not tested.
+  * The interactive TUI-driven Disable path is still **NOT TESTED**; see
+    `docs/manual-acceptance-phase3c6.md`. CLI Disable is not a substitute.
   * Final safety hardening (2026-11-18): preflight now reports
     `completed=true` / `activation_ready=no` with structured blocking issues, warnings and
     unknown facts. On the live host `xray_tun` carries the IPv4 default route and is
@@ -170,5 +169,5 @@ Cross-compilation for `windows/amd64`, `linux/amd64`, `linux/arm64`, `darwin/amd
   tests still need an elevated Windows run and a native Linux host.
 * macOS TUN is compiled and unit-tested but not verified on real hardware, so it stays
   unofficial.
-* There is no autostart or supervisor yet, so after a reboot a core is not restarted
-  automatically (Phase 3D).
+* The supervisor exists, but autostart at login is not implemented (3D.4), so after a
+  reboot a core is not restarted automatically.

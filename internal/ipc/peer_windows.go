@@ -4,7 +4,6 @@ package ipc
 
 import "net"
 
-// verifyPeer is a no-op on Windows AF_UNIX: Go does not expose peer
-// credentials for AF_UNIX, and Named Pipes with an explicit SID ACL are not
-// implemented yet. Access relies on the per-user LocalAppData directory.
+// verifyPeer is a no-op for Windows Named Pipes: there is no AF_UNIX peer
+// credential, and access is enforced by the per-user SID DACL at connect time.
 func verifyPeer(net.Conn) error { return nil }

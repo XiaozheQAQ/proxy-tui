@@ -38,13 +38,18 @@ type Model struct {
 
 	profiles      []model.Profile
 	statuses      map[model.CoreKind]core.Status
+	kinds         []model.CoreKind
+	active        map[model.CoreKind]model.Profile
+	corePaths     map[model.CoreKind]string
+	logs          []logging.Entry
 	live          liveState
 	network       network.Report
 	tun           tun.Status
 	connectivity  app.ProxyConnectivity
 	supervisorErr string
 
-	settings storage.Settings
+	settings       storage.Settings
+	settingsSaving bool
 
 	dialog  dialogs.Dialog
 	confirm *pages.Action
@@ -77,12 +82,15 @@ type liveState struct {
 // New builds the root model.
 func New(application *app.Frontend) *Model {
 	m := &Model{
-		app:      application,
-		page:     pages.IDOverview,
-		core:     model.CoreMihomo,
-		pages:    map[pages.ID]pages.Page{},
-		statuses: map[model.CoreKind]core.Status{},
-		settings: application.Settings,
+		app:       application,
+		page:      pages.IDOverview,
+		core:      model.CoreMihomo,
+		pages:     map[pages.ID]pages.Page{},
+		statuses:  map[model.CoreKind]core.Status{},
+		kinds:     application.Cores.Kinds(),
+		active:    map[model.CoreKind]model.Profile{},
+		corePaths: map[model.CoreKind]string{},
+		settings:  application.Settings,
 	}
 	m.pages[pages.IDOverview] = pages.NewOverview()
 	m.pages[pages.IDMihomo] = pages.NewCorePage(model.CoreMihomo)
@@ -124,11 +132,8 @@ func (m *Model) selector() (model.Profile, bool) {
 func (m *Model) rebuildData() {
 	profiles := m.profiles
 	findActive := func(kind model.CoreKind) (model.Profile, bool) {
-		active, ok := m.app.Subs.ActiveFor(kind)
-		if !ok {
-			return model.Profile{}, false
-		}
-		return active, true
+		active, ok := m.active[kind]
+		return active, ok
 	}
 
 	status := m.statusOf(m.core)
@@ -177,8 +182,8 @@ func (m *Model) rebuildData() {
 		overview.ConnectionsErr = m.live.connErr
 	}
 
-	cores := make(map[model.CoreKind]pages.CoreData, len(m.app.Cores.Kinds()))
-	for _, kind := range m.app.Cores.Kinds() {
+	cores := make(map[model.CoreKind]pages.CoreData, len(m.kinds))
+	for _, kind := range m.kinds {
 		data := pages.CoreData{
 			Core:     kind,
 			Status:   m.statusOf(kind),
@@ -206,11 +211,11 @@ func (m *Model) rebuildData() {
 		connections.Err = m.live.connErr
 	}
 
-	logs := pages.LogsData{Entries: m.app.Logs.Tail(800)}
+	logs := pages.LogsData{Entries: m.logs}
 
-	coreDirs := make([]string, 0, len(m.app.Cores.Kinds()))
-	for _, kind := range m.app.Cores.Kinds() {
-		if binary := m.app.CoreBinaryPath(kind); binary != "" {
+	coreDirs := make([]string, 0, len(m.kinds))
+	for _, kind := range m.kinds {
+		if binary := m.corePaths[kind]; binary != "" {
 			coreDirs = append(coreDirs, strings.TrimSuffix(binary, ".exe"))
 		}
 	}
@@ -323,7 +328,7 @@ func countForCore(profiles []model.Profile, kind model.CoreKind) int {
 
 // runningCore reports which core is currently running, if any.
 func (m *Model) runningCore() (model.CoreKind, bool) {
-	for _, kind := range m.app.Cores.Kinds() {
+	for _, kind := range m.kinds {
 		if m.statusOf(kind).Running {
 			return kind, true
 		}
@@ -339,9 +344,11 @@ func (m *Model) refreshCmd() tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 		defer cancel()
 		msg := refreshMsg{
-			statuses: map[model.CoreKind]core.Status{},
-			profiles: application.Subs.List(),
-			logs:     application.Logs.Tail(800),
+			statuses:  map[model.CoreKind]core.Status{},
+			profiles:  application.Subs.List(),
+			logs:      application.Logs.Tail(800),
+			active:    map[model.CoreKind]model.Profile{},
+			corePaths: map[model.CoreKind]string{},
 		}
 		if err := application.Health(ctx); err != nil {
 			msg.supervisorErr = err.Error()
@@ -349,6 +356,8 @@ func (m *Model) refreshCmd() tea.Cmd {
 			msg.logs = nil
 			return msg
 		}
+		msg.settings = application.SettingsSnapshot(ctx)
+		msg.settingsLoaded = true
 		if report, err := application.NetworkReport(ctx); err != nil {
 			msg.networkErr = err.Error()
 		} else {
@@ -357,8 +366,12 @@ func (m *Model) refreshCmd() tea.Cmd {
 		if tunStatus, err := application.TUNStatus(ctx); err == nil {
 			msg.tun = tunStatus
 		}
-		for _, coreKind := range application.Cores.Kinds() {
+		for _, coreKind := range m.kinds {
 			msg.statuses[coreKind] = application.Cores.Status(ctx, coreKind)
+			if active, ok := application.Subs.ActiveFor(coreKind); ok {
+				msg.active[coreKind] = active
+			}
+			msg.corePaths[coreKind] = application.CoreBinaryPath(coreKind)
 		}
 		if running {
 			msg.live.kind = kind
@@ -385,14 +398,19 @@ func (m *Model) refreshCmd() tea.Cmd {
 
 // refreshMsg is the result of refreshCmd.
 type refreshMsg struct {
-	statuses      map[model.CoreKind]core.Status
-	profiles      []model.Profile
-	logs          []logging.Entry
-	live          liveState
-	network       network.Report
-	supervisorErr string
-	networkErr    string
-	tun           tun.Status
+	statuses       map[model.CoreKind]core.Status
+	profiles       []model.Profile
+	kinds          []model.CoreKind
+	active         map[model.CoreKind]model.Profile
+	corePaths      map[model.CoreKind]string
+	logs           []logging.Entry
+	live           liveState
+	network        network.Report
+	supervisorErr  string
+	networkErr     string
+	tun            tun.Status
+	settings       storage.Settings
+	settingsLoaded bool
 }
 
 // notice sets the transient footer message.

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/proxytui/proxy-tui/internal/core"
@@ -73,6 +74,7 @@ type FrontendAPI interface {
 	CoreBinaryPath(kind model.CoreKind) string
 	SettingsSnapshot(ctx context.Context) storage.Settings
 	UpdateSettings(ctx context.Context, settings storage.Settings) error
+	PatchSettings(ctx context.Context, patch map[string]json.RawMessage) error
 	Health(ctx context.Context) error
 }
 
@@ -147,6 +149,10 @@ func (f *Frontend) Health(ctx context.Context) error          { return f.api.Hea
 
 func (f *Frontend) SettingsSnapshot(ctx context.Context) storage.Settings {
 	return f.api.SettingsSnapshot(ctx)
+}
+
+func (f *Frontend) PatchSettings(ctx context.Context, patch map[string]json.RawMessage) error {
+	return f.api.PatchSettings(ctx, patch)
 }
 
 func (f *Frontend) SaveSettings(ctx context.Context, settings storage.Settings) error {

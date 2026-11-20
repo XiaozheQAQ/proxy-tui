@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
@@ -26,13 +27,14 @@ jobs:
       - name: vet
         run: go vet ./...
       - name: test
-        run: go test ./...
-      - name: windows named pipe ipc
-        if: runner.os == 'Windows'
-        run: go test -race ./internal/ipc ./internal/supervisor -count=1
-      - name: native unix peer ipc
-        if: runner.os != 'Windows'
-        run: go test -race ./internal/ipc ./internal/supervisor -count=1
+        run: go test ./... -count=1
+      - name: race (all packages)
+        run: go test -race ./... -count=1
+      - name: short ipc fuzz
+        if: runner.os == 'Linux'
+        run: |
+          go test ./internal/ipc -run '^$' -fuzz=FuzzReadMessage -fuzztime=10s
+          go test ./internal/ipc -run '^$' -fuzz=FuzzRequestJSON -fuzztime=10s
 
   release-build:
     runs-on: ubuntu-latest

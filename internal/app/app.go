@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/proxytui/proxy-tui/internal/core"
@@ -32,17 +33,18 @@ var Version = "0.2.0-dev"
 
 // App is the wired application.
 type App struct {
-	Paths     storage.Paths
-	Settings  storage.Settings
-	Keymap    storage.Keymap
-	Logs      *logging.Buffer
-	Subs      *subscription.Manager
-	Cores     *core.Manager
-	Network   *network.Manager
-	TUN       *tun.Manager
-	Runtime   core.RuntimeOptions
-	BuildInfo string
-	Started   time.Time
+	Paths      storage.Paths
+	settingsMu sync.RWMutex
+	Settings   storage.Settings
+	Keymap     storage.Keymap
+	Logs       *logging.Buffer
+	Subs       *subscription.Manager
+	Cores      *core.Manager
+	Network    *network.Manager
+	TUN        *tun.Manager
+	Runtime    core.RuntimeOptions
+	BuildInfo  string
+	Started    time.Time
 }
 
 // New opens (and creates) every managed directory and wires the services.
@@ -163,7 +165,7 @@ func (a *App) DefaultTunCore(ctx context.Context) model.CoreKind {
 			return kind
 		}
 	}
-	if kind, err := model.ParseCoreKind(a.Settings.TunCore); err == nil {
+	if kind, err := model.ParseCoreKind(a.settingsCopy().TunCore); err == nil {
 		return kind
 	}
 	return model.CoreMihomo
@@ -191,7 +193,7 @@ func (a *App) ApplyTrafficMode(ctx context.Context, mode network.Mode, kind mode
 			switch {
 			case report.BackupActive:
 				if _, disableErr := a.DisableSystemProxy(ctx); disableErr != nil {
-					result.Warnings = append(result.Warnings, "restoring the desktop proxy before TUN failed: "+disableErr.Error())
+					return result, fmt.Errorf("refusing to enable TUN: restoring the desktop proxy first failed: %w", disableErr)
 				}
 			case report.Desktop.Enabled:
 				result.Warnings = append(result.Warnings,
@@ -371,13 +373,13 @@ func (a *App) TunPlatform() string {
 
 // EnableSystemProxy points the desktop proxy at the local core.
 func (a *App) EnableSystemProxy(ctx context.Context) (network.Result, error) {
-	result, err := a.ApplyTrafficMode(ctx, network.ModeSystemProxy, "", TunSettingsFrom(a.Settings))
+	result, err := a.ApplyTrafficMode(ctx, network.ModeSystemProxy, "", TunSettingsFrom(a.settingsCopy()))
 	return result.Network, err
 }
 
 // DisableSystemProxy restores the desktop proxy settings captured earlier.
 func (a *App) DisableSystemProxy(ctx context.Context) (network.Result, error) {
-	result, err := a.ApplyTrafficMode(ctx, network.ModeOff, "", TunSettingsFrom(a.Settings))
+	result, err := a.ApplyTrafficMode(ctx, network.ModeOff, "", TunSettingsFrom(a.settingsCopy()))
 	return result.Network, err
 }
 
@@ -409,9 +411,17 @@ func BuildInfo() string {
 	return fmt.Sprintf("%s %s/%s · %s", Version, osName(), osArch(), host)
 }
 
-// SaveSettings persists the current settings.
+// SaveSettings persists the current settings. It is retained for tests and
+// diagnostics; production writes go through UpdateSettings/PatchSettings.
 func (a *App) SaveSettings() error {
-	return storage.SaveSettings(a.Paths, a.Settings)
+	return storage.SaveSettings(a.Paths, a.settingsCopy())
+}
+
+// settingsCopy returns a copy safe for concurrent readers.
+func (a *App) settingsCopy() storage.Settings {
+	a.settingsMu.RLock()
+	defer a.settingsMu.RUnlock()
+	return a.Settings
 }
 
 // Import runs a subscription import.
@@ -516,7 +526,7 @@ func (a *App) Doctor(ctx context.Context) []string {
 		}
 		lines = append(lines, fmt.Sprintf("network backup: %v", report.BackupActive))
 	}
-	lines = append(lines, "note: TUN and DNS takeover are handled by the core and are not implemented yet (Phase 3C)")
+	lines = append(lines, "note: TUN/DNS takeover is handled by the core; real activation requires Administrator/root")
 	return lines
 }
 

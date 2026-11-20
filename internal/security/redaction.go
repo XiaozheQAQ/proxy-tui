@@ -22,6 +22,12 @@ const redacted = "REDACTED"
 
 var inlineSecret = regexp.MustCompile(`(?i)((?:token|access_token|refresh_token|api[_-]?key|apikey|password|passwd|pwd|secret|signature|ticket|sub)=)([^&\s"']+)`)
 
+// inlinePathSecret also masks credentials embedded in path-like strings and
+// error messages, where they appear after a slash or colon rather than "=".
+var inlinePathSecret = regexp.MustCompile(`(?i)((?:token|access_token|refresh_token|api[_-]?key|apikey|password|passwd|pwd|secret|authorization|signature)[=:/])([A-Za-z0-9._~-]{8,})`)
+
+var longPathSegment = regexp.MustCompile(`/([A-Za-z0-9._~-]{16,})`)
+
 // RedactURL masks credential-bearing parts of a URL while keeping enough
 // structure for a human to recognise it.
 func RedactURL(raw string) string {
@@ -52,12 +58,51 @@ func RedactURL(raw string) string {
 			u.RawQuery = q.Encode()
 		}
 	}
+	if u.Path != "" {
+		segments := strings.Split(u.Path, "/")
+		for i, segment := range segments {
+			if looksLikeSecretSegment(segment) {
+				segments[i] = redacted
+			}
+		}
+		u.Path = strings.Join(segments, "/")
+		if u.RawPath != "" {
+			u.RawPath = u.Path
+		}
+	}
 	return u.String()
+}
+
+func looksLikeSecretSegment(segment string) bool {
+	if len(segment) < 16 {
+		return false
+	}
+	hasDigit := false
+	hasLetter := false
+	for _, r := range segment {
+		switch {
+		case r >= '0' && r <= '9':
+			hasDigit = true
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z'):
+			hasLetter = true
+		case r == '.', r == '_', r == '~', r == '-':
+		default:
+			return false
+		}
+	}
+	return hasDigit && hasLetter
 }
 
 // Redact masks token-like key/value pairs in arbitrary text such as logs.
 func Redact(s string) string {
-	return inlineSecret.ReplaceAllString(s, "1"+redacted)
+	s = inlineSecret.ReplaceAllString(s, "${1}"+redacted)
+	s = inlinePathSecret.ReplaceAllString(s, "${1}"+redacted)
+	return longPathSegment.ReplaceAllStringFunc(s, func(match string) string {
+		if looksLikeSecretSegment(match[1:]) {
+			return "/" + redacted
+		}
+		return match
+	})
 }
 
 // MaskSecret keeps the first and last four characters of a secret.

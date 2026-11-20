@@ -23,6 +23,7 @@ type fakeCores struct {
 	pid          int
 	startedAt    time.Time
 	binary       string
+	configPath   string
 	startResults []error
 	starts       []core.StartOptions
 	stops        int
@@ -45,6 +46,7 @@ func (f *fakeCores) Status(ctx context.Context, kind model.CoreKind) core.Status
 		PID:        f.pid,
 		StartedAt:  f.startedAt,
 		BinaryPath: f.binary,
+		ConfigPath: f.configPath,
 	}
 }
 
@@ -197,6 +199,14 @@ func newTestManager(t *testing.T) (*Manager, *fakeCores, *fakeSubs, *fakeProbe, 
 		profile: model.Profile{ID: "p1", Name: "Test", Core: model.CoreMihomo},
 		config:  []byte(lifecycleProfile),
 	}
+	configPath := filepath.Join(paths.RuntimeDir(), "mihomo", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte("runtime-config"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cores.configPath = configPath
 	probe := &fakeProbe{current: lifecycleFacts(false)}
 	manager := NewManager(paths, cores, subs, probe, nil)
 	manager.pollInterval = time.Millisecond
@@ -765,5 +775,61 @@ tun:
 	}
 	if len(result.Warnings) == 0 {
 		t.Error("expected warnings for the existing TUN block")
+	}
+}
+
+func TestEnableWithoutTUNInterfaceRollsBack(t *testing.T) {
+	manager, cores, _, probe, _ := newTestManager(t)
+	probe.set(lifecycleFacts(false))
+	if _, err := manager.Enable(context.Background(), EnableOptions{Core: model.CoreMihomo, Settings: Defaults()}); err == nil {
+		t.Fatal("Enable succeeded without observing a TUN interface")
+	}
+	if cores.stops == 0 {
+		t.Fatal("core was not stopped after a failed TUN verification")
+	}
+	if cores.running {
+		t.Fatal("core is still running after rollback")
+	}
+}
+
+func TestEnableStateWriteFailureRollsBackCore(t *testing.T) {
+	manager, cores, _, probe, _ := newTestManager(t)
+	probe.push(lifecycleFacts(false), lifecycleFacts(false), lifecycleFacts(true))
+	manager.writeState = func(runtimeState) error { return errors.New("disk full") }
+	_, err := manager.Enable(context.Background(), EnableOptions{Core: model.CoreMihomo, Settings: Defaults()})
+	if err == nil || !strings.Contains(err.Error(), "persist TUN state") {
+		t.Fatalf("Enable error = %v", err)
+	}
+	if cores.stops == 0 {
+		t.Fatal("core was not stopped after state persistence failed")
+	}
+	if cores.running {
+		t.Fatal("core still running after state persistence failure")
+	}
+}
+
+func TestConfigDigestChangeRefusesStop(t *testing.T) {
+	manager, cores, _, probe, _ := newTestManager(t)
+	probe.push(lifecycleFacts(false), lifecycleFacts(false), lifecycleFacts(true))
+	if _, err := manager.Enable(context.Background(), EnableOptions{Core: model.CoreMihomo, Settings: Defaults()}); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	state, _ := manager.loadState()
+	if state == nil || state.CoreConfigPath == "" || state.ConfigSHA256 == "" {
+		t.Fatalf("config identity not persisted: %+v", state)
+	}
+	if err := os.WriteFile(state.CoreConfigPath, []byte("tampered-config"), 0o600); err != nil {
+		t.Fatalf("tamper config: %v", err)
+	}
+	probe.set(lifecycleFacts(true))
+	result, err := manager.Disable(context.Background())
+	if err != nil {
+		t.Fatalf("Disable: %v", err)
+	}
+	if cores.stops != 0 {
+		t.Fatalf("must not stop a core whose config identity changed (stops=%d)", cores.stops)
+	}
+	if result.Released {
+		t.Fatal("disable reported release for an unverified owner")
 	}
 }

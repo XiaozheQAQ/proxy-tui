@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -111,13 +112,16 @@ func (b *fakeBackend) Callable() any                { return b.facade }
 
 func testPaths(t *testing.T) storage.Paths {
 	t.Helper()
-	// Windows AF_UNIX paths are short; t.TempDir() includes the test name and can
-	// exceed the limit for long test names.
+	// Keep temporary paths short; some Windows IPC names and test directories
+	// have practical length limits.
 	dir, err := os.MkdirTemp("", "pt-sup-")
 	if err != nil {
 		t.Fatalf("temp dir: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	// Isolate the Windows Named Pipe from a real user supervisor while still
+	// exercising the production endpoint code.
+	t.Setenv("PROXY_TUI_HOME", dir)
 	paths := storage.Paths{
 		Config: dir + "/config",
 		Data:   dir + "/data",
@@ -433,5 +437,309 @@ func TestVersionMismatch(t *testing.T) {
 	}
 	if response.Success || response.Error == nil || response.Error.Code != ipc.CodeVersionMismatch {
 		t.Fatalf("response = %+v", response)
+	}
+}
+
+func TestConcurrentOperationIDExecutesOnce(t *testing.T) {
+	paths := testPaths(t)
+	backend := newFakeBackend()
+	facade := &fakeFacade{}
+	backend.facade = facade
+	endpoint, cancel, done := startServer(t, paths, backend)
+	defer func() {
+		cancel()
+		<-done
+	}()
+	const clients = 32
+	results := make(chan error, clients)
+	for i := 0; i < clients; i++ {
+		go func() {
+			client, err := ipc.Dial(context.Background(), endpoint, time.Second)
+			if err != nil {
+				results <- err
+				return
+			}
+			defer client.Close()
+			results <- client.CallWithOperationID(context.Background(), ipc.OpAppCall,
+				map[string]any{"method": "CoreRestart"}, nil, "same-operation")
+		}()
+	}
+	successes := 0
+	for i := 0; i < clients; i++ {
+		err := <-results
+		if err == nil {
+			successes++
+			continue
+		}
+		if rpcErr, ok := err.(*ipc.RPCError); ok && rpcErr.Code == ipc.CodeOperationInProgress {
+			continue
+		}
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if successes == 0 {
+		t.Fatal("no caller observed the completed operation")
+	}
+	if got := atomic.LoadInt32(&facade.calls); got != 1 {
+		t.Fatalf("operation executed %d times, want 1", got)
+	}
+}
+
+func TestOperationIDFingerprintConflict(t *testing.T) {
+	paths := testPaths(t)
+	backend := newFakeBackend()
+	endpoint, cancel, done := startServer(t, paths, backend)
+	defer func() {
+		cancel()
+		<-done
+	}()
+	client, err := ipc.Dial(context.Background(), endpoint, time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	if err := client.CallWithOperationID(context.Background(), ipc.OpCoreStart,
+		map[string]string{"core": "mihomo"}, nil, "shared-id"); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	err = client.CallWithOperationID(context.Background(), ipc.OpCoreStart,
+		map[string]string{"core": "sing-box"}, nil, "shared-id")
+	if err == nil {
+		t.Fatal("reusing an operation id for a different payload must fail")
+	}
+	if rpcErr, ok := err.(*ipc.RPCError); !ok || rpcErr.Code != ipc.CodeBadRequest {
+		t.Fatalf("error = %v, want BAD_REQUEST", err)
+	}
+	backend.mu.Lock()
+	starts := backend.starts
+	backend.mu.Unlock()
+	if starts != 1 {
+		t.Fatalf("Starts = %d, want 1", starts)
+	}
+}
+
+type blockingFacade struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+	calls   int32
+}
+
+func (b *blockingFacade) CoreRestart(context.Context) error {
+	atomic.AddInt32(&b.calls, 1)
+	b.once.Do(func() { close(b.entered) })
+	<-b.release
+	return nil
+}
+
+func TestOperationStatusRunningThenSucceeded(t *testing.T) {
+	paths := testPaths(t)
+	backend := newFakeBackend()
+	facade := &blockingFacade{entered: make(chan struct{}), release: make(chan struct{})}
+	backend.facade = facade
+	endpoint, cancel, done := startServer(t, paths, backend)
+	defer func() {
+		cancel()
+		<-done
+	}()
+	client, err := ipc.Dial(context.Background(), endpoint, time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	queryClient, err := ipc.Dial(context.Background(), endpoint, time.Second)
+	if err != nil {
+		t.Fatalf("dial query: %v", err)
+	}
+	defer queryClient.Close()
+	result := make(chan error, 1)
+	go func() {
+		result <- client.CallWithOperationID(context.Background(), ipc.OpAppCall,
+			map[string]any{"method": "CoreRestart"}, nil, "op-running")
+	}()
+	select {
+	case <-facade.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("operation did not start")
+	}
+	var running OperationStatusPayload
+	if err := queryClient.Call(context.Background(), ipc.OpOperationGet,
+		map[string]string{"operation_id": "op-running"}, &running); err != nil {
+		t.Fatalf("operation.get: %v", err)
+	}
+	if running.Status != "RUNNING" {
+		t.Fatalf("status = %q, want RUNNING", running.Status)
+	}
+	// A retry while RUNNING must not execute the operation again.
+	err = queryClient.CallWithOperationID(context.Background(), ipc.OpAppCall,
+		map[string]any{"method": "CoreRestart"}, nil, "op-running")
+	if rpcErr, ok := err.(*ipc.RPCError); !ok || rpcErr.Code != ipc.CodeOperationInProgress {
+		t.Fatalf("retry error = %v, want OPERATION_IN_PROGRESS", err)
+	}
+	close(facade.release)
+	if err := <-result; err != nil {
+		t.Fatalf("operation: %v", err)
+	}
+	var completed OperationStatusPayload
+	if err := queryClient.Call(context.Background(), ipc.OpOperationGet,
+		map[string]string{"operation_id": "op-running"}, &completed); err != nil {
+		t.Fatalf("operation.get after completion: %v", err)
+	}
+	if completed.Status != "SUCCEEDED" {
+		t.Fatalf("status = %q, want SUCCEEDED", completed.Status)
+	}
+	if got := atomic.LoadInt32(&facade.calls); got != 1 {
+		t.Fatalf("calls = %d, want 1", got)
+	}
+}
+
+func TestOperationTerminalExpiry(t *testing.T) {
+	oldTTL := operationCacheTTL
+	operationCacheTTL = 25 * time.Millisecond
+	defer func() { operationCacheTTL = oldTTL }()
+
+	paths := testPaths(t)
+	backend := newFakeBackend()
+	facade := &fakeFacade{}
+	backend.facade = facade
+	endpoint, cancel, done := startServer(t, paths, backend)
+	defer func() {
+		cancel()
+		<-done
+	}()
+	client, err := ipc.Dial(context.Background(), endpoint, time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	if err := client.CallWithOperationID(context.Background(), ipc.OpAppCall,
+		map[string]any{"method": "CoreRestart"}, nil, "op-expire"); err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	var status OperationStatusPayload
+	if err := client.Call(context.Background(), ipc.OpOperationGet,
+		map[string]string{"operation_id": "op-expire"}, &status); err != nil {
+		t.Fatalf("operation.get: %v", err)
+	}
+	if status.Status != "EXPIRED" {
+		t.Fatalf("status = %q, want EXPIRED", status.Status)
+	}
+}
+
+func TestOperationTimeoutClassification(t *testing.T) {
+	backend := newFakeBackend()
+	h := NewHandler(backend, "endpoint", "test", "log", func() {}, nil)
+	if got := h.timeoutFor(ipc.Request{Operation: ipc.OpPing}); got != readOperationTimeout {
+		t.Fatalf("read timeout = %s", got)
+	}
+	if got := h.timeoutFor(ipc.Request{Operation: ipc.OpCoreStart, Payload: []byte(`{"core":"mihomo"}`)}); got != mutationTimeout {
+		t.Fatalf("mutation timeout = %s", got)
+	}
+}
+
+func TestStopRejectsNewMutations(t *testing.T) {
+	backend := newFakeBackend()
+	h := NewHandler(backend, "endpoint", "test", "log", func() {}, nil)
+	stop := h.handle(context.Background(), ipc.Request{Version: ipc.Version, RequestID: "stop", Operation: ipc.OpSupervisorStop})
+	if !stop.Success {
+		t.Fatalf("stop: %+v", stop)
+	}
+	start := h.handle(context.Background(), ipc.Request{Version: ipc.Version, RequestID: "start", Operation: ipc.OpCoreStart, Payload: []byte(`{"core":"mihomo"}`)})
+	if start.Success {
+		t.Fatal("mutation accepted while stopping")
+	}
+	if start.Error == nil || start.Error.Code != ipc.CodeNetworkBlocked {
+		t.Fatalf("error = %+v, want NETWORK_BLOCKED", start.Error)
+	}
+}
+
+func TestLifecycleOwnerCannotBeOverwritten(t *testing.T) {
+	paths := testPaths(t)
+	first := LifecycleRecord{Version: 1, InstanceID: "first", Status: LifecycleRunning, PID: 1}
+	if err := SaveLifecycle(paths, first); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	second := LifecycleRecord{Version: 1, InstanceID: "second", Status: LifecycleStopped, PID: 2}
+	if err := SaveLifecycleOwner(paths, second); !errors.Is(err, ErrLifecycleOwnedByOther) {
+		t.Fatalf("owner write error = %v", err)
+	}
+	record, err := LoadLifecycle(paths)
+	if err != nil || record == nil || record.InstanceID != "first" {
+		t.Fatalf("record = %+v, err=%v", record, err)
+	}
+}
+
+func TestOperationCacheKeepsRunningEntryAndBoundsTerminal(t *testing.T) {
+	backend := newFakeBackend()
+	h := NewHandler(backend, "endpoint", "test", "log", func() {}, nil)
+	running := ipc.Request{Version: ipc.Version, RequestID: "r", OperationID: "running", Operation: ipc.OpCoreStart, Payload: []byte(`{"core":"mihomo"}`)}
+	if _, claimed, err := h.claimOperation(running, requestFingerprint(running)); err != nil || !claimed {
+		t.Fatalf("claim running: claimed=%v err=%v", claimed, err)
+	}
+	for i := 0; i < operationCacheMax+40; i++ {
+		request := ipc.Request{Version: ipc.Version, RequestID: "r", OperationID: fmt.Sprintf("op-%d", i), Operation: ipc.OpCoreStop, Payload: []byte(`{"core":"mihomo"}`)}
+		fingerprint := requestFingerprint(request)
+		if _, claimed, err := h.claimOperation(request, fingerprint); err != nil || !claimed {
+			t.Fatalf("claim %d: claimed=%v err=%v", i, claimed, err)
+		}
+		h.finishOperation(request.OperationID, fingerprint, ipc.Response{Version: ipc.Version, RequestID: "r", Success: true})
+	}
+	h.cacheMu.Lock()
+	defer h.cacheMu.Unlock()
+	if len(h.cache) > operationCacheMax {
+		t.Fatalf("cache size = %d, want <= %d", len(h.cache), operationCacheMax)
+	}
+	if entry, ok := h.cache["running"]; !ok || !entry.running {
+		t.Fatal("RUNNING entry was evicted")
+	}
+}
+
+func TestOperationStatusFailed(t *testing.T) {
+	paths := testPaths(t)
+	backend := newFakeBackend()
+	backend.facade = &failingFacade{}
+	endpoint, cancel, done := startServer(t, paths, backend)
+	defer func() {
+		cancel()
+		<-done
+	}()
+	client, err := ipc.Dial(context.Background(), endpoint, time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	err = client.CallWithOperationID(context.Background(), ipc.OpAppCall,
+		map[string]any{"method": "CoreRestart"}, nil, "op-failed")
+	if err == nil {
+		t.Fatal("operation should fail")
+	}
+	var status OperationStatusPayload
+	if err := client.Call(context.Background(), ipc.OpOperationGet,
+		map[string]string{"operation_id": "op-failed"}, &status); err != nil {
+		t.Fatalf("operation.get: %v", err)
+	}
+	if status.Status != "FAILED" || status.Error == nil {
+		t.Fatalf("status = %+v", status)
+	}
+}
+
+type failingFacade struct{}
+
+func (f *failingFacade) CoreRestart(context.Context) error { return errors.New("boom") }
+
+type panicBackend struct{ *fakeBackend }
+
+func (p *panicBackend) Statuses(context.Context) map[model.CoreKind]core.Status {
+	panic("backend boom")
+}
+
+func TestHandlerPanicBecomesFailedResponse(t *testing.T) {
+	h := NewHandler(&panicBackend{fakeBackend: newFakeBackend()}, "endpoint", "test", "log", func() {}, nil)
+	response := h.handle(context.Background(), ipc.Request{Version: ipc.Version, RequestID: "panic", Operation: ipc.OpCoreStatus})
+	if response.Success {
+		t.Fatal("panic was reported as success")
+	}
+	if response.Error == nil || response.Error.Code != ipc.CodeInternal {
+		t.Fatalf("error = %+v", response.Error)
 	}
 }

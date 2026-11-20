@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -32,7 +33,7 @@ func NewFacade(application *App) *Facade { return &Facade{app: application} }
 func (f *Facade) Ping(ctx context.Context) error { return nil }
 
 func (f *Facade) ConfigInfo() ConfigInfo {
-	return ConfigInfo{Paths: f.app.Paths, Settings: f.app.Settings}
+	return ConfigInfo{Paths: f.app.Paths, Settings: f.app.settingsCopy()}
 }
 
 func (f *Facade) SettingsSnapshot(ctx context.Context) storage.Settings {
@@ -41,6 +42,10 @@ func (f *Facade) SettingsSnapshot(ctx context.Context) storage.Settings {
 
 func (f *Facade) UpdateSettings(ctx context.Context, settings storage.Settings) error {
 	return f.app.UpdateSettings(ctx, settings)
+}
+
+func (f *Facade) PatchSettings(ctx context.Context, patch map[string]json.RawMessage) error {
+	return f.app.PatchSettings(ctx, patch)
 }
 
 func (f *Facade) CoreKinds() []model.CoreKind { return f.app.Cores.Kinds() }

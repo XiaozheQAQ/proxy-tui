@@ -22,6 +22,8 @@ type fakeAdapter struct {
 	applyErr    error
 	verifyErr   error
 	restoreErr  error
+	restoreNoop bool
+	stateErr    error
 	restored    []network.Snapshot
 	applied     []network.Desired
 	restoreCall int
@@ -37,6 +39,9 @@ func (f *fakeAdapter) Capabilities(ctx context.Context) network.Capabilities {
 }
 
 func (f *fakeAdapter) GetState(ctx context.Context) (network.ProxyState, error) {
+	if f.stateErr != nil {
+		return network.ProxyState{}, f.stateErr
+	}
 	return f.state, nil
 }
 
@@ -70,6 +75,9 @@ func (f *fakeAdapter) Restore(ctx context.Context, snapshot network.Snapshot) er
 	f.restored = append(f.restored, snapshot)
 	if f.restoreErr != nil {
 		return f.restoreErr
+	}
+	if f.restoreNoop {
+		return nil
 	}
 	state := network.ProxyState{}
 	_ = json.Unmarshal(snapshot.Data, &state)
@@ -248,7 +256,7 @@ func TestRecoverInterruptedTransaction(t *testing.T) {
 		Phase:     "prepared",
 		Adapter:   "fake",
 		StartedAt: time.Now(),
-		Snapshot:  network.Snapshot{Adapter: "fake", Proxy: network.ProxyState{}, Data: json.RawMessage(`{"Enabled":true,"Host":"1.2.3.4","Port":8080}`)},
+		Snapshot:  network.Snapshot{Adapter: "fake", Proxy: network.ProxyState{Enabled: true, Host: "1.2.3.4", Port: 8080}, Data: json.RawMessage(`{"Enabled":true,"Host":"1.2.3.4","Port":8080}`)},
 	}
 	if err := network.WriteJournalForTest(paths, journal); err != nil {
 		t.Fatalf("write journal: %v", err)
@@ -373,7 +381,130 @@ func TestReportIncludesEnvironmentAndBackup(t *testing.T) {
 	if report.Mode != network.ModeOff {
 		t.Errorf("mode = %q", report.Mode)
 	}
-	if len(report.Notes) == 0 {
-		t.Error("expected a TUN note")
+	// TUN is core-native now; the legacy "not implemented" note must be gone.
+	for _, note := range report.Notes {
+		if strings.Contains(note, "not implemented") {
+			t.Fatalf("stale TUN note: %q", note)
+		}
+	}
+}
+
+func TestDisableKeepsBackupWhenRestoreIsSilentlyIneffective(t *testing.T) {
+	paths := testPaths(t)
+	adapter := &fakeAdapter{name: "fake", supported: true, state: network.ProxyState{Enabled: true, Host: "10.0.0.5", Port: 8080}}
+	manager := network.NewManager(paths, nil, adapter)
+	if _, err := manager.EnableSystemProxy(context.Background(), desired()); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	adapter.restoreNoop = true
+	if _, err := manager.DisableSystemProxy(context.Background()); err == nil {
+		t.Fatal("disable reported success although restore did not take effect")
+	}
+	if _, err := os.Stat(filepath.Join(paths.RuntimeDir(), "network-backup.json")); err != nil {
+		t.Fatal("backup was deleted after an unverified restore")
+	}
+	if _, err := os.Stat(filepath.Join(paths.RuntimeDir(), "network-journal.json")); err != nil {
+		t.Fatal("journal was deleted after an unverified restore")
+	}
+}
+
+func TestRecoverKeepsBackupWhenRestoreIsSilentlyIneffective(t *testing.T) {
+	paths := testPaths(t)
+	adapter := &fakeAdapter{name: "fake", supported: true, state: network.ProxyState{Enabled: true, Host: "10.0.0.5", Port: 8080}}
+	manager := network.NewManager(paths, nil, adapter)
+	if _, err := manager.EnableSystemProxy(context.Background(), desired()); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	adapter.restoreNoop = true
+	if _, err := manager.Recover(context.Background(), false); err == nil {
+		t.Fatal("recover reported success although restore did not take effect")
+	}
+	if _, err := os.Stat(filepath.Join(paths.RuntimeDir(), "network-backup.json")); err != nil {
+		t.Fatal("backup was deleted after an unverified recovery")
+	}
+}
+
+func TestRecoverCommittingJournalDoesNotRollbackCommittedEnable(t *testing.T) {
+	paths := testPaths(t)
+	adapter := &fakeAdapter{name: "fake", supported: true, state: network.ProxyState{}}
+	manager := network.NewManager(paths, nil, adapter)
+	if _, err := manager.EnableSystemProxy(context.Background(), desired()); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	before := adapter.restoreCall
+	snapshot, err := adapter.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if err := network.WriteJournalForTest(paths, network.TransactionJournal{
+		Phase:     "committing",
+		Adapter:   "fake",
+		StartedAt: time.Now(),
+		Desired:   desired(),
+		Snapshot:  snapshot,
+	}); err != nil {
+		t.Fatalf("journal: %v", err)
+	}
+	result, err := manager.Recover(context.Background(), false)
+	if err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+	if !strings.Contains(result.Action, "commit") {
+		t.Fatalf("result = %+v", result)
+	}
+	if adapter.restoreCall != before {
+		t.Fatal("a committed enable was rolled back because of a leftover journal")
+	}
+	if network.JournalForTest(paths) != nil {
+		t.Fatal("journal was not cleared")
+	}
+	if _, err := os.Stat(filepath.Join(paths.RuntimeDir(), "network-backup.json")); err != nil {
+		t.Fatal("backup was lost for a committed enable")
+	}
+}
+
+func TestRecoverCommittingJournalWithoutBackupRestores(t *testing.T) {
+	paths := testPaths(t)
+	adapter := &fakeAdapter{name: "fake", supported: true, state: network.ProxyState{Enabled: true, Host: "127.0.0.1", Port: 7890}}
+	manager := network.NewManager(paths, nil, adapter)
+	snapshot := network.Snapshot{
+		Adapter: "fake",
+		Proxy:   network.ProxyState{Enabled: true, Host: "10.0.0.5", Port: 8080},
+		Data:    json.RawMessage(`{"Enabled":true,"Host":"10.0.0.5","Port":8080}`),
+	}
+	if err := network.WriteJournalForTest(paths, network.TransactionJournal{
+		Phase:     "committing",
+		Adapter:   "fake",
+		StartedAt: time.Now(),
+		Desired:   desired(),
+		Snapshot:  snapshot,
+	}); err != nil {
+		t.Fatalf("journal: %v", err)
+	}
+	if _, err := manager.Recover(context.Background(), false); err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+	if !adapter.state.Enabled || adapter.state.Port != 8080 {
+		t.Fatalf("state = %+v, want original snapshot", adapter.state)
+	}
+}
+
+func TestReportMarksStaleBackupNotActive(t *testing.T) {
+	paths := testPaths(t)
+	adapter := &fakeAdapter{name: "fake", supported: true, state: network.ProxyState{Enabled: true, Host: "10.0.0.5", Port: 8080}}
+	manager := network.NewManager(paths, nil, adapter)
+	if _, err := manager.EnableSystemProxy(context.Background(), desired()); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	adapter.state = network.ProxyState{Enabled: true, Host: "10.9.9.9", Port: 9090}
+	report, err := manager.Report(context.Background(), "127.0.0.1:7890")
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	if report.BackupActive {
+		t.Fatal("stale backup is still reported as active ownership")
+	}
+	if !report.BackupStale {
+		t.Fatal("stale backup was not reported")
 	}
 }

@@ -28,7 +28,7 @@ func httpGet(ctx context.Context, client HTTPDoer, url string, maxBytes int64) (
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("User-Agent", "proxy-tui/0.1.0")
+	req.Header.Set("User-Agent", "proxy-tui/0.2.0")
 	req.Header.Set("Accept", "application/octet-stream, application/vnd.github+json")
 	resp, err := client.Do(req)
 	if err != nil {

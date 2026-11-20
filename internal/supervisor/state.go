@@ -51,3 +51,16 @@ func SaveState(paths storage.Paths, state State) error {
 func RemoveState(paths storage.Paths) {
 	_ = os.Remove(StatePath(paths))
 }
+
+// RemoveStateIfOwner removes the state file only when it still describes this
+// supervisor instance. A delayed old process must not delete the state of its
+// replacement.
+func RemoveStateIfOwner(paths storage.Paths, instanceID string) {
+	state, err := LoadState(paths)
+	if err != nil {
+		return
+	}
+	if state == nil || state.InstanceID == instanceID {
+		_ = os.Remove(StatePath(paths))
+	}
+}

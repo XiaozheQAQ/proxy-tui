@@ -4,6 +4,27 @@
 
 Phase 3A/3B/3C: transactional network state, desktop system proxy and core-native TUN.
 
+### Final engineering closure
+
+* IPC: read operations keep a 30s deadline; mutations use a 15m business deadline, the
+  client honours the caller deadline, and a lost response is resolved through operation.get
+  instead of re-executing the mutation. Cleanup/rollback uses a fresh bounded context.
+* Core identity: runtime state now records process start time, executable, binary SHA-256
+  and config SHA-256. Stop verifies them and refuses legacy/mismatched state; a transient
+  API failure reports DEGRADED and keeps the state instead of deleting it.
+* OperationID: atomic claim + payload fingerprint; RUNNING entries never expire/evict;
+  terminal TTL starts at completion.
+* Settings: locked snapshot, field-level PatchSettings, TUI refresh and render-only View.
+* Network: restore is verified before backup removal; a committing journal prevents a
+  committed enable from being rolled back; stale backups no longer block supervisor stop.
+* Supervisor: new mutations are rejected after stop intent; lifecycle/state writes are
+  owner-guarded; CLI stop waits for state+lifecycle cleanup; ensure lock checks liveness.
+* TUN: config path/digest verified; no-interface or state-write failure rolls back the core;
+  TUN activation is refused when system-proxy restore fails.
+* Secret: UI/text redaction covers path tokens; canary tests added.
+* Tests: Windows registry test keys isolated, TUN host probes live-gated, dual Remote
+  Frontend settings integration test, process identity/stop tests.
+
 ### Added
 
 * `internal/network`: unified network state manager with capabilities, full-fidelity
@@ -59,16 +80,17 @@ Phase 3A/3B/3C: transactional network state, desktop system proxy and core-nativ
   * Phase 3D.2.4 coordination: persisted supervisor lifecycle (RUNNING vs
     INTENTIONALLY_STOPPED), crash-triggered Ensure serialized by a cross-process lock,
     remote auto-ensure hook, Unix client-side peer/socket verification, and native Unix
-    peer/endpoint tests. Cross-SID denial and interactive two-TUI coordination remain
+    peer/endpoint tests. Cross-user denial and interactive two-TUI coordination remain
     NOT TESTED.
   * Phase 3D.2.3 Windows IPC: replaced AF_UNIX with a go-winio v0.6.2 Named Pipe, restricted
-    by an explicit Logon-SID DACL; go-winio rejects remote clients and pipe-name conflicts
+    by an explicit user-SID DACL; go-winio rejects remote clients and pipe-name conflicts
     fail closed. Added native Windows pipe lifecycle tests (32 clients, 100 restarts, partial
-    frames, close/unblock, conflict, DACL). Cross-SID denial remains NOT TESTED.
+    frames, close/unblock, conflict, DACL). Cross-user denial remains NOT TESTED.
   * Phase 3D.2.2 hardening: operation result lifecycle (`proxy operation status`,
     RUNNING/SUCCEEDED/FAILED/EXPIRED with a five-minute bounded cache) and shared settings
     ownership. A Windows Named Pipe transport was prototyped but reverted due handle
-    lifecycle crashes; Windows remains on AF_UNIX without SID-level authentication.
+    lifecycle crashes; at that point Windows remained on AF_UNIX without SID-level
+    authentication (superseded by the 3D.2.3 entry above).
   * Phase 3D.2 hardening: shared settings writes now go through supervisor
     `UpdateSettings` (no direct config writes from TUI/CLI), mutation requests carry
     OperationIDs with a five-minute dedupe cache, and the remote frontend retries transport

@@ -2,16 +2,16 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
-
-	"github.com/proxytui/proxy-tui/internal/core"
 	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/proxytui/proxy-tui/internal/app"
+	"github.com/proxytui/proxy-tui/internal/core"
 	"github.com/proxytui/proxy-tui/internal/network"
 	"github.com/proxytui/proxy-tui/internal/storage"
 	"github.com/proxytui/proxy-tui/internal/subscription"
@@ -93,6 +93,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if typed.supervisorErr != "" {
 			m.statuses = map[model.CoreKind]core.Status{}
 			m.profiles = nil
+			m.active = map[model.CoreKind]model.Profile{}
+			m.corePaths = map[model.CoreKind]string{}
+			m.logs = nil
 			m.live = liveState{}
 			m.tun = tun.Status{}
 			m.network = network.Report{
@@ -103,6 +106,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.statuses = typed.statuses
 		m.profiles = typed.profiles
+		if typed.kinds != nil {
+			m.kinds = typed.kinds
+		}
+		m.active = typed.active
+		m.corePaths = typed.corePaths
+		m.logs = typed.logs
+		if typed.settingsLoaded && !m.settingsSaving {
+			m.settings = typed.settings
+		}
 		m.live = typed.live
 		m.network = typed.network
 		if typed.networkErr != "" {
@@ -141,7 +153,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if typed.modeChanged {
 			m.settings.TrafficMode = string(typed.mode)
 			m.rebuildData()
-			return m, tea.Batch(m.refreshCmd(), m.saveSettings())
+			return m, tea.Batch(m.refreshCmd(), m.saveSettings(map[string]json.RawMessage{
+				"traffic_mode": rawJSON(string(typed.mode)),
+			}))
 		}
 		return m, m.refreshCmd()
 
@@ -224,12 +238,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case settingsSavedMsg:
+		m.settingsSaving = false
 		if typed.err != nil {
 			m.notice("error", "save settings: %s", typed.err.Error())
-		} else {
-			m.app.Settings = m.settings
+			return m, nil
 		}
-		return m, nil
+		return m, m.refreshCmd()
 
 	case tea.KeyMsg:
 		return m.handleKey(typed)
@@ -496,23 +510,22 @@ func (m *Model) dispatch(action pages.Action) tea.Cmd {
 		}
 		m.rebuildData()
 		m.notice("ok", "theme: %s", m.settings.Theme)
-		return m.saveSettings()
+		return m.saveSettings(map[string]json.RawMessage{"theme": rawJSON(m.settings.Theme)})
 	case pages.ActionToggleAutoUpdate:
 		m.settings.AutoUpdate = !m.settings.AutoUpdate
 		m.rebuildData()
 		m.notice("ok", "auto update: %v", m.settings.AutoUpdate)
-		return m.saveSettings()
+		return m.saveSettings(map[string]json.RawMessage{"auto_update": rawJSON(m.settings.AutoUpdate)})
 	case pages.ActionToggleConfirmQuit:
 		m.settings.ConfirmQuit = !m.settings.ConfirmQuit
 		m.rebuildData()
 		m.notice("ok", "confirm quit: %v", m.settings.ConfirmQuit)
-		return m.saveSettings()
+		return m.saveSettings(map[string]json.RawMessage{"confirm_quit": rawJSON(m.settings.ConfirmQuit)})
 	case pages.ActionCycleInterval:
 		m.settings.UpdateIntervalSeconds = nextInterval(m.settings.UpdateIntervalSeconds)
-		m.app.Subs.SetDefaultInterval(m.settings.UpdateIntervalSeconds)
 		m.rebuildData()
 		m.notice("ok", "update interval: %d h", m.settings.UpdateIntervalSeconds/3600)
-		return m.saveSettings()
+		return m.saveSettings(map[string]json.RawMessage{"update_interval_seconds": rawJSON(m.settings.UpdateIntervalSeconds)})
 	case pages.ActionClearLogs:
 		m.app.Logs.Clear()
 		m.notice("ok", "logs cleared")
@@ -748,13 +761,34 @@ func (m *Model) autoUpdateCmd() tea.Cmd {
 	return m.cmdUpdateAll()
 }
 
-func (m *Model) saveSettings() tea.Cmd {
+func rawJSON(value any) json.RawMessage {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
+func tunSettingsPatch(settings storage.Settings) map[string]json.RawMessage {
+	return map[string]json.RawMessage{
+		"tun_core":       rawJSON(settings.TunCore),
+		"tun_stack":      rawJSON(settings.TunStack),
+		"tun_mtu":        rawJSON(settings.TunMTU),
+		"tun_dns_hijack": rawJSON(settings.TunDNSHijack),
+		"tun_ipv6":       rawJSON(settings.TunIPv6),
+	}
+}
+
+func (m *Model) saveSettings(patch map[string]json.RawMessage) tea.Cmd {
+	if len(patch) == 0 {
+		return nil
+	}
+	m.settingsSaving = true
 	application := m.app
-	settings := m.settings
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		return settingsSavedMsg{err: application.SaveSettings(ctx, settings)}
+		return settingsSavedMsg{err: application.PatchSettings(ctx, patch)}
 	}
 }
 
@@ -846,7 +880,7 @@ func (m *Model) cmdStartCore(kind model.CoreKind) tea.Cmd {
 func (m *Model) cmdStopCore(kind model.CoreKind) tea.Cmd {
 	application := m.app
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		if err := application.Cores.Stop(ctx, kind); err != nil {
 			return actionResultMsg{label: "stop " + kind.DisplayName(), err: err}
@@ -1071,9 +1105,9 @@ func (m *Model) cmdSetTrafficMode(mode network.Mode) tea.Cmd {
 func (m *Model) reapplyTunIfActive() tea.Cmd {
 	if m.tun.Enabled {
 		m.busy = "applying TUN settings"
-		return tea.Batch(m.cmdSetTrafficMode(network.ModeTUN), m.saveSettings())
+		return tea.Batch(m.cmdSetTrafficMode(network.ModeTUN), m.saveSettings(tunSettingsPatch(m.settings)))
 	}
-	return m.saveSettings()
+	return m.saveSettings(tunSettingsPatch(m.settings))
 }
 
 func (m *Model) cmdTUNPreflight() tea.Cmd {

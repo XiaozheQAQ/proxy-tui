@@ -24,9 +24,10 @@ type Adapter struct {
 	logf  func(level, msg string)
 	proc  *core.Process
 
-	mu     sync.Mutex
-	client *clashapi.Client
-	cancel context.CancelFunc
+	mu         sync.Mutex
+	client     *clashapi.Client
+	cancel     context.CancelFunc
+	configPath string
 
 	trafficMu sync.Mutex
 	upRate    int64
@@ -63,8 +64,9 @@ func (a *Adapter) Capabilities() core.Capabilities {
 	}
 }
 
-// Status reports the installed version and running state. A core started by a
-// previous process is adopted when its control API still answers.
+// Status separates process identity from API availability. A verified
+// process whose API is temporarily unreachable is DEGRADED, not deleted and
+// not reported as STOPPED. Only a genuinely gone process clears the state.
 func (a *Adapter) Status(ctx context.Context) core.Status {
 	status := core.Status{Core: model.CoreMihomo}
 	if version, binary, ok := core.NewLayout(a.paths, model.CoreMihomo).Installed(); ok {
@@ -73,31 +75,54 @@ func (a *Adapter) Status(ctx context.Context) core.Status {
 		status.BinaryPath = binary
 	}
 	if a.proc.Running() {
+		a.mu.Lock()
+		configPath := a.configPath
+		a.mu.Unlock()
 		status.Running = true
 		status.PID = a.proc.PID()
 		status.StartedAt = a.proc.StartedAt()
-		status.ConfigPath = a.proc.ConfigPath()
+		status.ConfigPath = configPath
 		status.APIAddr = a.proc.APIAddr()
 		status.LastError = a.proc.LastError()
 		return status
 	}
-	if state, ok := core.ReadRuntimeState(a.paths, model.CoreMihomo); ok {
-		client := clashapi.New(state.APIAddr, state.Secret)
-		probeCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-		_, err := client.Version(probeCtx)
-		cancel()
-		if err == nil {
-			status.Running = true
-			status.PID = state.PID
-			status.StartedAt = state.StartedAt
-			status.APIAddr = state.APIAddr
-			status.ConfigPath = state.ConfigPath
-			a.adopt(client)
-			return status
-		}
-		_ = core.RemoveRuntimeState(a.paths, model.CoreMihomo)
+	state, ok := core.ReadRuntimeState(a.paths, model.CoreMihomo)
+	if !ok {
+		status.LastError = a.proc.LastError()
+		return status
 	}
-	status.LastError = a.proc.LastError()
+	_, verdict, verifyErr := core.VerifyRuntimeState(state, false)
+	if verdict == core.ProcessGone {
+		_ = core.RemoveRuntimeState(a.paths, model.CoreMihomo)
+		status.LastError = "core process exited"
+		return status
+	}
+	status.PID = state.PID
+	status.StartedAt = state.ProcessStartedAt
+	status.APIAddr = state.APIAddr
+	status.ConfigPath = state.ConfigPath
+	if verdict != core.IdentityVerified || verifyErr != nil {
+		status.Degraded = true
+		if verifyErr != nil {
+			status.LastError = "core identity unavailable: " + verifyErr.Error()
+		} else {
+			status.LastError = "core identity cannot be verified (" + string(verdict) + "); refusing to manage this process"
+		}
+		return status
+	}
+	status.Running = true
+	client := clashapi.New(state.APIAddr, state.Secret)
+	probeCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	_, apiErr := client.Version(probeCtx)
+	cancel()
+	if apiErr != nil {
+		// The process is real and identity-verified. Keep the state and do
+		// not let a transient API failure mean "stopped" or "start another".
+		status.Degraded = true
+		status.LastError = "core API temporarily unavailable: " + apiErr.Error()
+		return status
+	}
+	a.adopt(client)
 	return status
 }
 
@@ -173,6 +198,16 @@ func (a *Adapter) Start(ctx context.Context, opts core.StartOptions) error {
 	if status := a.Status(ctx); status.Running {
 		return core.ErrAlreadyRunning
 	}
+	// A legacy, mismatched or otherwise unverifiable runtime state must block
+	// a new launch rather than allowing two processes to fight for the port.
+	if state, ok := core.ReadRuntimeState(a.paths, model.CoreMihomo); ok {
+		_, verdict, _ := core.VerifyRuntimeState(state, false)
+		if verdict != core.ProcessGone {
+			return fmt.Errorf("%w: existing runtime state for PID %d (%s); run 'proxy core stop' or inspect %s",
+				core.ErrCoreIdentityMismatch, state.PID, verdict, core.StatePath(a.paths, model.CoreMihomo))
+		}
+		_ = core.RemoveRuntimeState(a.paths, model.CoreMihomo)
+	}
 	version, binary, ok := core.NewLayout(a.paths, model.CoreMihomo).Installed()
 	if !ok {
 		return core.ErrNotInstalled
@@ -204,6 +239,9 @@ func (a *Adapter) Start(ctx context.Context, opts core.StartOptions) error {
 	a.client = client
 	a.mu.Unlock()
 
+	a.mu.Lock()
+	a.configPath = configPath
+	a.mu.Unlock()
 	if err := a.waitForAPI(ctx, client); err != nil {
 		_ = a.proc.Stop(3 * time.Second)
 		a.mu.Lock()
@@ -211,16 +249,31 @@ func (a *Adapter) Start(ctx context.Context, opts core.StartOptions) error {
 		a.mu.Unlock()
 		return err
 	}
+	identity, identityErr := core.ReadProcessIdentity(a.proc.PID())
+	if identityErr != nil {
+		_ = a.proc.Stop(3 * time.Second)
+		return fmt.Errorf("read core process identity: %w", identityErr)
+	}
+	binarySHA := core.HashFile(identity.Executable)
+	if binarySHA == "" {
+		_ = a.proc.Stop(3 * time.Second)
+		return fmt.Errorf("hash core binary %s: unreadable", identity.Executable)
+	}
+	configSHA := core.HashBytes(runtimeConfig)
 	a.startTrafficWatch(ctx, client)
 	state := core.RuntimeState{
-		Core:       model.CoreMihomo,
-		PID:        a.proc.PID(),
-		APIAddr:    apiAddr,
-		Secret:     secret,
-		ProxyPort:  a.opts.ProxyPort,
-		ConfigPath: configPath,
-		Version:    version,
-		StartedAt:  a.proc.StartedAt(),
+		Core:             model.CoreMihomo,
+		PID:              a.proc.PID(),
+		APIAddr:          apiAddr,
+		Secret:           secret,
+		ProxyPort:        a.opts.ProxyPort,
+		ConfigPath:       configPath,
+		Version:          version,
+		StartedAt:        a.proc.StartedAt(),
+		ProcessStartedAt: identity.StartedAt,
+		BinaryPath:       identity.Executable,
+		BinarySHA256:     binarySHA,
+		ConfigSHA256:     configSHA,
 	}
 	if err := core.WriteRuntimeState(a.paths, state); err != nil {
 		a.logf("warn", "persist runtime state: "+err.Error())
@@ -273,8 +326,10 @@ func (a *Adapter) startTrafficWatch(ctx context.Context, client *clashapi.Client
 	}()
 }
 
-// Stop terminates the core and the traffic stream, including a core adopted
-// from a previous process.
+// Stop terminates the core and the traffic stream. For an adopted process it
+// verifies PID start time, executable, binary hash and config hash before any
+// kill. Unverified or mismatched state is never killed and the state file is
+// kept for manual inspection.
 func (a *Adapter) Stop(ctx context.Context) error {
 	a.mu.Lock()
 	cancel := a.cancel
@@ -289,14 +344,46 @@ func (a *Adapter) Stop(ctx context.Context) error {
 	a.trafficMu.Unlock()
 
 	if a.proc.Running() {
-		err := a.proc.Stop(8 * time.Second)
-		_ = core.RemoveRuntimeState(a.paths, model.CoreMihomo)
-		return err
-	}
-	if state, ok := core.ReadRuntimeState(a.paths, model.CoreMihomo); ok {
-		if err := core.KillPID(state.PID); err != nil {
+		if err := a.proc.Stop(8 * time.Second); err != nil {
+			// Keep the state if the owned child could not be stopped.
 			return err
 		}
+		return core.RemoveRuntimeState(a.paths, model.CoreMihomo)
+	}
+	state, ok := core.ReadRuntimeState(a.paths, model.CoreMihomo)
+	if !ok {
+		return nil
+	}
+	_, verdict, verifyErr := core.VerifyRuntimeState(state, true)
+	if verifyErr != nil {
+		return fmt.Errorf("verify core identity before stop: %w", verifyErr)
+	}
+	switch verdict {
+	case core.ProcessGone:
+		return core.RemoveRuntimeState(a.paths, model.CoreMihomo)
+	case core.IdentityUnverified, core.IdentityMismatch:
+		return fmt.Errorf("%w: refusing to kill PID %d (%s); state kept at %s",
+			core.ErrCoreIdentityMismatch, state.PID, verdict, core.StatePath(a.paths, model.CoreMihomo))
+	}
+	// API identity is a useful confirmation, but a transient outage must not
+	// make a verified process unmanageable. An explicit authorization failure
+	// is treated as an identity mismatch.
+	probeCtx, cancelProbe := context.WithTimeout(ctx, 2*time.Second)
+	_, apiErr := clashapi.New(state.APIAddr, state.Secret).Version(probeCtx)
+	cancelProbe()
+	if apiErr != nil && (strings.Contains(apiErr.Error(), "HTTP 401") || strings.Contains(apiErr.Error(), "HTTP 403")) {
+		return fmt.Errorf("%w: core API rejected the stored secret for PID %d", core.ErrCoreIdentityMismatch, state.PID)
+	}
+	// Re-check immediately before killing so a process swap in the previous
+	// milliseconds cannot redirect the kill.
+	if _, again, err := core.VerifyRuntimeState(state, false); err != nil || again != core.IdentityVerified {
+		return fmt.Errorf("%w: core identity changed while stopping PID %d", core.ErrCoreIdentityMismatch, state.PID)
+	}
+	if err := core.KillPID(state.PID); err != nil {
+		return err
+	}
+	if !core.WaitProcessExit(state.PID, 5*time.Second) {
+		return fmt.Errorf("core PID %d did not exit; runtime state kept at %s", state.PID, core.StatePath(a.paths, model.CoreMihomo))
 	}
 	return core.RemoveRuntimeState(a.paths, model.CoreMihomo)
 }

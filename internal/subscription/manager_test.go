@@ -436,3 +436,26 @@ func TestDeleteRemovesFiles(t *testing.T) {
 		t.Error("active profile survived deletion")
 	}
 }
+
+func TestImportFailureRedactsURLCanary(t *testing.T) {
+	manager, _ := newTestManager(t)
+	const canary = "PROXYTUI_TEST_SECRET_SUB_91X"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	outcomes, err := manager.Import(context.Background(), ImportRequest{
+		Core:  model.CoreMihomo,
+		Input: server.URL + "/subscribe/" + canary + "?token=" + canary,
+	})
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if len(outcomes) != 1 || outcomes[0].Err == nil {
+		t.Fatalf("outcomes = %+v", outcomes)
+	}
+	combined := outcomes[0].Source + " " + outcomes[0].Err.Error()
+	if strings.Contains(combined, canary) {
+		t.Fatalf("canary leaked in import failure: %s", combined)
+	}
+}

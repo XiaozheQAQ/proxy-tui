@@ -9,6 +9,7 @@ import (
 
 	"github.com/proxytui/proxy-tui/internal/core"
 	"github.com/proxytui/proxy-tui/internal/format"
+	"github.com/proxytui/proxy-tui/internal/security"
 	"github.com/proxytui/proxy-tui/internal/tui/components"
 	"github.com/proxytui/proxy-tui/internal/tui/layout"
 )
@@ -153,7 +154,7 @@ func (p *Overview) profileBody(theme layout.Theme, width int) string {
 	profile := p.data.Active
 	source := "pasted content"
 	if profile.Source.URL != "" {
-		source = format.Truncate(profile.Source.URL, width-16)
+		source = format.Truncate(security.RedactURL(profile.Source.URL), width-16)
 	}
 	pairs := [][2]string{
 		{"Name", profile.Label()},

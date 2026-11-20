@@ -138,7 +138,7 @@ func TestCLIStatusAndDoctor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("doctor: %v", err)
 	}
-	for _, want := range []string{"proxy-tui", "platform:", "profiles:", "not implemented"} {
+	for _, want := range []string{"proxy-tui", "platform:", "profiles:", "TUN/DNS takeover"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("doctor output missing %q:\n%s", want, out)
 		}

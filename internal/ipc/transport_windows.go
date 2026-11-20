@@ -4,44 +4,56 @@ package ipc
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
 )
 
-// LogonSID returns the current login session SID. It fails closed when the
-// token does not expose a logon SID.
-func LogonSID() (string, error) {
+// UserSID returns the current Windows user SID. The supervisor scope is the
+// user, not the logon session: multiple sessions of the same user share one
+// runtime directory, core ports and state files, so they must share one
+// supervisor. Different users remain isolated by the kernel DACL.
+func UserSID() (string, error) {
 	token := windows.GetCurrentProcessToken()
-	groups, err := token.GetTokenGroups()
+	user, err := token.GetTokenUser()
 	if err != nil {
-		return "", fmt.Errorf("read token groups: %w", err)
+		return "", fmt.Errorf("read token user: %w", err)
 	}
-	for _, group := range groups.AllGroups() {
-		if group.Attributes&windows.SE_GROUP_LOGON_ID == windows.SE_GROUP_LOGON_ID {
-			return group.Sid.String(), nil
-		}
+	if user == nil || user.User.Sid == nil {
+		return "", fmt.Errorf("user SID is unavailable")
 	}
-	return "", fmt.Errorf("logon SID is unavailable")
+	return user.User.Sid.String(), nil
 }
 
-// EndpointPath returns the per-login-session Named Pipe name. The pipe name is
-// not a secret and is not the authentication mechanism; the DACL is.
-func EndpointPath(string) (string, error) {
-	sid, err := LogonSID()
+// EndpointPath returns the Named Pipe name. The default installation is one
+// supervisor per Windows user: the endpoint is keyed only by the user SID.
+// An explicit PROXY_TUI_HOME is a portable namespace; a runtime-directory
+// suffix keeps separate homes and test processes from sharing one pipe. The
+// DACL still scopes access to the user, and the pipe name is not the
+// authentication mechanism.
+func EndpointPath(runtimeDir string) (string, error) {
+	sid, err := UserSID()
 	if err != nil {
 		return "", err
 	}
 	suffix := strings.ReplaceAll(sid, "\\", "-")
+	if os.Getenv("PROXY_TUI_HOME") != "" {
+		sum := sha256.Sum256([]byte(filepath.Clean(runtimeDir)))
+		suffix += "-" + hex.EncodeToString(sum[:4])
+	}
 	return `\\.\pipe\proxy-tui-` + suffix, nil
 }
 
-// securityDescriptor grants full access only to the current logon session.
+// securityDescriptor grants full access only to the current user SID.
 func securityDescriptor() (string, error) {
-	sid, err := LogonSID()
+	sid, err := UserSID()
 	if err != nil {
 		return "", err
 	}

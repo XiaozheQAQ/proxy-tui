@@ -31,7 +31,8 @@ system proxy and core-native TUN integration (requires an elevated terminal).
 | Core-native TUN (Mihomo / sing-box) | implemented: rendering, validation, preflight, lifecycle, recovery |
 | TUN real activation | **requires Administrator/root**; preflight acceptance passed, activation BLOCKED pending an elevated authorized run |
 | DNS takeover and routing integration | delegated to the core's own TUN implementation |
-| Background Proxy Supervisor / IPC / autostart | **not implemented (Phase 3D)** |
+| Background Proxy Supervisor / IPC | implemented and locally tested; native CI and cross-user denial remain external evidence items |
+| Autostart at login | **not implemented (3D.4)** |
 
 Everything that is not implemented says so in the UI instead of pretending. See
 [docs/platform-support.md](docs/platform-support.md) and the [Phase 3 plan](docs/phase3.md).
@@ -118,16 +119,23 @@ ProxyTUI now ships a per-user detached supervisor and a versioned local IPC endp
 - `proxy core start|stop` use the supervisor when it is running; a present supervisor is
   authoritative. A stop is refused while a core, TUN or ProxyTUI-owned desktop proxy is
   still active.
-- IPC is a local Unix-domain socket (Windows 10+ AF_UNIX) with length-framed JSON,
-  request IDs, deadlines, version checks and serialized mutations. No TCP is exposed.
+- IPC is a versioned length-framed JSON protocol over a Windows Named Pipe
+  (`\\.\pipe\proxy-tui-<UserSID>` by default; `PROXY_TUI_HOME` adds a runtime-directory
+  suffix) protected by a user-SID DACL with remote clients rejected, or a 0600
+  Unix-domain socket with peer-UID checks. No TCP is exposed.
+  Read calls use short deadlines; long mutations use a per-operation deadline and are
+  queried through their OperationID instead of being retried blindly.
+- The default Windows endpoint is per-user. An explicit `PROXY_TUI_HOME` adds a runtime
+  suffix for portable/test isolation; only one runtime home should manage cores at a time,
+  because the local proxy/API ports are shared.
 
 **Current boundary:** TUI and CLI run through the supervisor via a remote `app.Frontend`;
 bare `proxy` ensures the supervisor and no production command falls back to a local core
-manager. Shared settings writes go through `UpdateSettings`, mutation requests use
+manager. Shared settings writes go through field-level `PatchSettings`, mutation requests use
 OperationIDs with supervisor-side deduplication, and `proxy operation status <id>` queries a
 result without re-executing. The client retries transport failures with bounded backoff.
-Windows uses a go-winio Named Pipe with a Logon-SID DACL and remote clients rejected;
-cross-SID denial is not yet tested. Supervisor lifecycle state distinguishes a user stop
+Windows uses a go-winio Named Pipe with a user-SID DACL and remote clients rejected;
+cross-user denial is not yet tested. Supervisor lifecycle state distinguishes a user stop
 from a crash, and concurrent Ensure is serialized. Interactive multi-TUI coordination,
 FakeCore crash adoption, interactive TUI coordination, health monitoring and autostart
 remain open. TUI TUN Disable manual acceptance is still NOT TESTED; see
@@ -271,7 +279,8 @@ Safety rules enforced by preflight:
 
 ## Security notes
 
-* Subscription URLs are redacted before they reach logs, the UI or error messages.
+* Subscription URLs are redacted before they reach logs, the UI or error messages; the
+  original URL is kept at 0600 only because updates need it.
 * Core control APIs bind to `127.0.0.1` only and use a random per-start secret.
 * The persisted core state (pid, API address, secret) lives in `state/runtime` with owner-only
   permissions and is removed on stop.
@@ -295,8 +304,8 @@ Safety rules enforced by preflight:
 * Phase 2 — core management and node operations (done; both cores verified on real releases)
 * Phase 3A — network state manager with backup, journal and recovery (done)
 * Phase 3B — desktop system proxy with conflict detection (done)
-* Phase 3C — TUN through the cores, DNS handling (planned)
-* Phase 3D — Proxy Supervisor, IPC, autostart (planned)
+* Phase 3C — TUN through the cores, DNS handling (implemented; native real-network acceptance is manual)
+* Phase 3D — Proxy Supervisor and IPC (implemented; autostart is 3D.4 and not started)
 * Phase 5 — release automation and docs (partially done)
 
 ## License

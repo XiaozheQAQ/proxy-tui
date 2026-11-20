@@ -45,6 +45,7 @@ type Manager struct {
 	now          func() time.Time
 	pollInterval time.Duration
 	pollTimeout  time.Duration
+	writeState   func(runtimeState) error
 
 	mu sync.Mutex
 }
@@ -80,6 +81,7 @@ type runtimeState struct {
 	CoreStartedAt    time.Time      `json:"core_started_at,omitempty"`
 	CoreBinary       string         `json:"core_binary,omitempty"`
 	CoreBinarySHA256 string         `json:"core_binary_sha256,omitempty"`
+	CoreConfigPath   string         `json:"core_config_path,omitempty"`
 	ConfigSHA256     string         `json:"config_sha256,omitempty"`
 	Settings         Settings       `json:"settings"`
 	Baseline         Facts          `json:"baseline"`
@@ -112,6 +114,9 @@ func (m *Manager) loadState() (*runtimeState, error) {
 }
 
 func (m *Manager) saveState(state runtimeState) error {
+	if m.writeState != nil {
+		return m.writeState(state)
+	}
 	if err := os.MkdirAll(m.paths.RuntimeDir(), 0o700); err != nil {
 		return fmt.Errorf("create runtime dir: %w", err)
 	}
@@ -128,7 +133,7 @@ func (m *Manager) removeState() error {
 
 // coreIdentity matches the persisted TUN owner against the live core process.
 // A legacy state without a pid can never be proven to be ours.
-func (m *Manager) coreIdentity(ctx context.Context, state *runtimeState) (core.Status, bool, bool) {
+func (m *Manager) coreIdentity(ctx context.Context, state *runtimeState, verifyDigests bool) (core.Status, bool, bool) {
 	status := m.cores.Status(ctx, state.Core)
 	if !status.Running {
 		return status, false, false
@@ -151,8 +156,20 @@ func (m *Manager) coreIdentity(ctx context.Context, state *runtimeState) (core.S
 	if state.CoreBinary != "" && status.BinaryPath != "" && !strings.EqualFold(state.CoreBinary, status.BinaryPath) {
 		return status, true, false
 	}
-	if state.CoreBinarySHA256 != "" && status.BinaryPath != "" {
+	if verifyDigests && state.CoreBinarySHA256 != "" && status.BinaryPath != "" {
 		if current := hashFile(status.BinaryPath); current != "" && current != state.CoreBinarySHA256 {
+			return status, true, false
+		}
+	}
+	// Config identity is only meaningful when both the path and the digest
+	// are present. A state that recorded a digest without a path is legacy
+	// and cannot be proven to be ours. Hashing is deferred to destructive
+	// paths (stop/recover/enable); frequent status polling stays cheap.
+	if verifyDigests && state.ConfigSHA256 != "" {
+		if state.CoreConfigPath == "" {
+			return status, true, false
+		}
+		if current := hashFile(state.CoreConfigPath); current == "" || current != state.ConfigSHA256 {
 			return status, true, false
 		}
 	}
@@ -260,7 +277,7 @@ func (m *Manager) Status(ctx context.Context) (Status, error) {
 		return Status{Level: LevelReady, Detail: "TUN is not enabled"}, nil
 	}
 	facts, factsErr := m.probe.Facts(ctx)
-	_, running, owned := m.coreIdentity(ctx, state)
+	_, running, owned := m.coreIdentity(ctx, state, false)
 	status := Status{
 		Enabled:        true,
 		Core:           state.Core,
@@ -341,7 +358,7 @@ func (m *Manager) buildEnvironment(ctx context.Context, kind model.CoreKind, set
 	}
 	if state, stateErr := m.loadState(); stateErr == nil && state != nil {
 		env.TUNStateFound = true
-		_, running, owned := m.coreIdentity(ctx, state)
+		_, running, owned := m.coreIdentity(ctx, state, true)
 		env.RecordedTUN = presentInterfaces(state.NewInterfaces, facts)
 		env.TUNStateOwned = owned
 		env.TUNStateActive = running && owned
@@ -441,7 +458,7 @@ func (m *Manager) Enable(ctx context.Context, opts EnableOptions) (Result, error
 	}
 	// Ownership guard: never stop a core instance the state does not own.
 	if previousState != nil {
-		if _, running, owned := m.coreIdentity(ctx, previousState); running && !owned {
+		if _, running, owned := m.coreIdentity(ctx, previousState, true); running && !owned {
 			return Result{}, fmt.Errorf("the recorded TUN state belongs to a different %s process; run proxy network tun recover first", kind.DisplayName())
 		}
 	}
@@ -468,7 +485,7 @@ func (m *Manager) Enable(ctx context.Context, opts EnableOptions) (Result, error
 	if previousState != nil {
 		if leftover := m.waitInterfacesReleased(ctx, previousState.NewInterfaces); len(leftover) > 0 {
 			if wasRunning {
-				m.restartPlain(ctx, kind, profile)
+				m.restartPlainCleanup(ctx, kind, profile)
 			}
 			return Result{Report: preReport, Overrides: rendered.Overrides, Warnings: rendered.Warnings},
 				fmt.Errorf("previous TUN interfaces were not released (%s); run proxy network tun recover first", strings.Join(leftover, ", "))
@@ -478,14 +495,14 @@ func (m *Manager) Enable(ctx context.Context, opts EnableOptions) (Result, error
 	baseline, err := m.probe.Facts(ctx)
 	if err != nil {
 		if wasRunning {
-			m.restartPlain(ctx, kind, profile)
+			m.restartPlainCleanup(ctx, kind, profile)
 		}
 		return Result{}, fmt.Errorf("collect baseline network state: %w", err)
 	}
 	report := Evaluate(m.buildEnvironment(ctx, kind, settings, baseline, coreStatus, true, "", rendered.Overrides, rendered.Warnings))
 	if !report.ActivationReady {
 		if wasRunning {
-			m.restartPlain(ctx, kind, profile)
+			m.restartPlainCleanup(ctx, kind, profile)
 		}
 		return Result{Report: report, Overrides: rendered.Overrides, Warnings: rendered.Warnings},
 			fmt.Errorf("preflight not activation-ready: %s", activationBlockers(report))
@@ -497,20 +514,36 @@ func (m *Manager) Enable(ctx context.Context, opts EnableOptions) (Result, error
 		Config:      rendered.Config,
 	}
 	if err := m.cores.Start(ctx, kind, startOptions); err != nil {
-		rollbackErr := error(nil)
-		if wasRunning {
-			rollbackErr = m.restartPlain(ctx, kind, profile)
-		}
+		rollbackErr := m.rollbackStartedTUN(ctx, wasRunning, kind, profile)
 		if rollbackErr != nil {
 			return Result{Report: report, Overrides: rendered.Overrides, Warnings: rendered.Warnings},
-				fmt.Errorf("start %s with TUN failed: %w (restoring the previous config also failed: %v)", kind.DisplayName(), err, rollbackErr)
+				fmt.Errorf("start %s with TUN failed: %w (BLOCKED: restoring the previous config also failed: %v)", kind.DisplayName(), err, rollbackErr)
 		}
 		return Result{Report: report, Overrides: rendered.Overrides, Warnings: rendered.Warnings},
 			fmt.Errorf("start %s with TUN failed: %w", kind.DisplayName(), err)
 	}
 
 	current, verify := m.waitForTUN(ctx, baseline)
+	if len(verify.NewInterfaces) == 0 {
+		cleanupErr := m.rollbackStartedTUN(ctx, wasRunning, kind, profile)
+		message := fmt.Sprintf("%s did not create a TUN interface; refusing to report TUN as active", kind.DisplayName())
+		if cleanupErr != nil {
+			message += fmt.Sprintf(" (BLOCKED: cleanup failed: %v; inspect the core process and run proxy network tun recover)", cleanupErr)
+		}
+		return Result{Report: report, Overrides: rendered.Overrides, Warnings: rendered.Warnings, Verify: verify},
+			fmt.Errorf("%s", message)
+	}
 	live := m.cores.Status(ctx, kind)
+	configSHA := hashFile(live.ConfigPath)
+	if live.ConfigPath == "" || configSHA == "" || live.PID <= 0 {
+		cleanupErr := m.rollbackStartedTUN(ctx, wasRunning, kind, profile)
+		message := "cannot record core identity/config digest for the TUN process; refusing to leave it unmanaged"
+		if cleanupErr != nil {
+			message += fmt.Sprintf(" (BLOCKED: cleanup failed: %v)", cleanupErr)
+		}
+		return Result{Report: report, Overrides: rendered.Overrides, Warnings: rendered.Warnings, Verify: verify},
+			fmt.Errorf("%s", message)
+	}
 	state := runtimeState{
 		Enabled:          true,
 		Core:             kind,
@@ -521,7 +554,8 @@ func (m *Manager) Enable(ctx context.Context, opts EnableOptions) (Result, error
 		CoreStartedAt:    live.StartedAt,
 		CoreBinary:       live.BinaryPath,
 		CoreBinarySHA256: hashFile(live.BinaryPath),
-		ConfigSHA256:     configDigest(rendered.Config),
+		CoreConfigPath:   live.ConfigPath,
+		ConfigSHA256:     configSHA,
 		Settings:         settings,
 		Baseline:         baseline,
 		NewInterfaces:    verify.NewInterfaces,
@@ -531,8 +565,14 @@ func (m *Manager) Enable(ctx context.Context, opts EnableOptions) (Result, error
 		StartedAt:        m.now(),
 	}
 	if err := m.saveState(state); err != nil {
+		m.logf("error", fmt.Sprintf("persist TUN state failed: %v; core pid=%d interfaces=%v", err, live.PID, verify.NewInterfaces))
+		cleanupErr := m.rollbackStartedTUN(ctx, wasRunning, kind, profile)
+		message := fmt.Sprintf("persist TUN state: %v (core pid=%d interfaces=%v)", err, live.PID, verify.NewInterfaces)
+		if cleanupErr != nil {
+			message += fmt.Sprintf(" (BLOCKED: cleanup failed: %v; the core may still run with TUN)", cleanupErr)
+		}
 		return Result{Report: report, Overrides: rendered.Overrides, Warnings: rendered.Warnings, Verify: verify},
-			fmt.Errorf("persist TUN state: %w", err)
+			fmt.Errorf("%s", message)
 	}
 	status := m.statusFromState(state, current)
 	m.logf("info", fmt.Sprintf("TUN enabled on %s with %s (%s)", kind.DisplayName(), status.Interface, status.Routing))
@@ -564,7 +604,7 @@ func (m *Manager) disableLocked(ctx context.Context) (DisableResult, error) {
 	}
 
 	warnings := make([]string, 0, 2)
-	_, running, owned := m.coreIdentity(ctx, state)
+	_, running, owned := m.coreIdentity(ctx, state, true)
 	if running && !owned {
 		// A different process owns the core now. Never stop it; only clear a
 		// provably released state or report the leftover interfaces.
@@ -671,7 +711,7 @@ func (m *Manager) Recover(ctx context.Context) (RecoveryResult, error) {
 		return RecoveryResult{}, nil
 	}
 	warnings := make([]string, 0, 2)
-	_, running, owned := m.coreIdentity(ctx, state)
+	_, running, owned := m.coreIdentity(ctx, state, true)
 
 	if running && !owned {
 		facts, factsErr := m.probe.Facts(ctx)
@@ -742,6 +782,33 @@ func (m *Manager) Recover(ctx context.Context) (RecoveryResult, error) {
 		Status:   Status{Level: LevelReady, Detail: "TUN is not enabled"},
 		Warnings: warnings,
 	}, nil
+}
+
+// rollbackStartedTUN stops a core that was already launched with the TUN
+// config and, when it was running before, restarts it with the plain config.
+// Cleanup uses a fresh, bounded context: the original RPC context may already
+// be cancelled by an IPC deadline.
+func (m *Manager) rollbackStartedTUN(parent context.Context, wasRunning bool, kind model.CoreKind, profile model.Profile) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 45*time.Second)
+	defer cancel()
+	if m.cores.Status(ctx, kind).Running {
+		if err := m.cores.Stop(ctx, kind); err != nil {
+			return fmt.Errorf("stop TUN core during rollback: %w", err)
+		}
+	}
+	if !wasRunning {
+		return nil
+	}
+	if err := m.restartPlain(ctx, kind, profile); err != nil {
+		return fmt.Errorf("restart plain core during rollback: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) restartPlainCleanup(parent context.Context, kind model.CoreKind, profile model.Profile) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 45*time.Second)
+	defer cancel()
+	return m.restartPlain(ctx, kind, profile)
 }
 
 func (m *Manager) restartPlain(ctx context.Context, kind model.CoreKind, profile model.Profile) error {

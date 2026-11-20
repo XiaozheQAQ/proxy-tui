@@ -58,8 +58,12 @@ func (c *Client) CallWithOperationID(ctx context.Context, operation string, payl
 		}
 		request.Payload = data
 	}
+	// Honour the caller's deadline when it has one. A longer business
+	// deadline (installation, TUN activation) must not be truncated by the
+	// transport default; callers that need a short read still set a short
+	// context deadline.
 	deadline := time.Now().Add(c.timeout)
-	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+	if ctxDeadline, ok := ctx.Deadline(); ok {
 		deadline = ctxDeadline
 	}
 	_ = c.conn.SetDeadline(deadline)

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -105,13 +106,109 @@ func (r *remote) invoke(ctx context.Context, method string, args []any, out any)
 			}
 			return json.Unmarshal(result, out)
 		}
-		if _, definitive := err.(*ipc.RPCError); definitive {
+		if rpcErr, ok := err.(*ipc.RPCError); ok {
+			if operationID != "" && (rpcErr.Code == ipc.CodeOperationInProgress || rpcErr.Code == ipc.CodeOperationTimeout) {
+				// The server may still be executing the mutation. Never
+				// re-execute a non-idempotent operation: query its result.
+				if ctx.Err() != nil {
+					queryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					return r.waitOperation(queryCtx, operationID, out)
+				}
+				return r.waitOperation(ctx, operationID, out)
+			}
 			return err
 		}
 		lastErr = err
 		_ = r.client.Close()
 	}
+	if lastErr != nil && operationID != "" {
+		queryCtx := ctx
+		cancel := func() {}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			// The caller timed out, but the server may still be executing.
+			// Query with a short independent context instead of re-sending
+			// the mutation.
+			queryCtx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+		}
+		waitErr := r.waitOperation(queryCtx, operationID, out)
+		cancel()
+		if waitErr == nil {
+			return nil
+		}
+		if rpcErr, ok := waitErr.(*ipc.RPCError); ok {
+			return rpcErr
+		}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("operation %s result is unknown after the client deadline: %w", operationID, waitErr)
+		}
+	}
 	return lastErr
+}
+
+type operationStatusPayload struct {
+	OperationID string          `json:"operation_id"`
+	Status      string          `json:"status"`
+	Error       *ipc.RPCError   `json:"error,omitempty"`
+	Payload     json.RawMessage `json:"payload,omitempty"`
+	StoredAt    time.Time       `json:"stored_at,omitempty"`
+}
+
+// waitOperation polls operation.get after a lost or timed-out response. It
+// never re-sends the mutation itself.
+func (r *remote) waitOperation(ctx context.Context, operationID string, out any) error {
+	deadline := time.Now().Add(15 * time.Minute)
+	if ctxDeadline, ok := ctx.Deadline(); ok {
+		deadline = ctxDeadline
+	}
+	running := false
+	for {
+		if time.Now().After(deadline) {
+			if running {
+				return &ipc.RPCError{Code: ipc.CodeOperationInProgress, Message: fmt.Sprintf("operation %s is still running; query 'proxy operation status %s'", operationID, operationID)}
+			}
+			return fmt.Errorf("operation %s did not finish before the deadline; query 'proxy operation status %s'", operationID, operationID)
+		}
+		var status operationStatusPayload
+		err := r.client.Call(ctx, ipc.OpOperationGet, map[string]string{"operation_id": operationID}, &status)
+		if err != nil {
+			if _, definitive := err.(*ipc.RPCError); definitive {
+				return err
+			}
+			_ = r.client.Close()
+			if reconnectErr := r.reconnect(ctx); reconnectErr != nil {
+				return fmt.Errorf("operation %s result is unknown: %w", operationID, reconnectErr)
+			}
+			continue
+		}
+		switch status.Status {
+		case "SUCCEEDED":
+			if out == nil || len(status.Payload) == 0 {
+				return nil
+			}
+			return json.Unmarshal(status.Payload, out)
+		case "FAILED":
+			if status.Error != nil {
+				return status.Error
+			}
+			return &ipc.RPCError{Code: ipc.CodeInternal, Message: "operation failed without an error"}
+		case "UNKNOWN", "EXPIRED":
+			return fmt.Errorf("operation %s is %s in the supervisor; it may have restarted", operationID, status.Status)
+		case "RUNNING":
+			running = true
+			// keep waiting
+		default:
+			return fmt.Errorf("operation %s returned unknown status %q", operationID, status.Status)
+		}
+		select {
+		case <-ctx.Done():
+			if running {
+				return &ipc.RPCError{Code: ipc.CodeOperationInProgress, Message: fmt.Sprintf("operation %s is still running; query 'proxy operation status %s'", operationID, operationID)}
+			}
+			return ctx.Err()
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
 }
 
 func (r *remote) reconnect(ctx context.Context) error {
@@ -130,7 +227,7 @@ func isRemoteMutation(method string) bool {
 	switch method {
 	case "CoreInstall", "CoreStart", "CoreStop", "CoreRestart", "CoreSelect",
 		"SubsSetActive", "SubsDelete", "SubsUpdate", "SubsUpdateAll", "SubsSetDefaultInterval",
-		"UpdateSettings", "LogsClear", "Import", "ApplyTrafficMode", "RecoverTUN",
+		"UpdateSettings", "PatchSettings", "LogsClear", "Import", "ApplyTrafficMode", "RecoverTUN",
 		"RecoverNetwork", "TUNDisable":
 		return true
 	}
@@ -366,6 +463,9 @@ func (a *remoteAPI) SettingsSnapshot(ctx context.Context) storage.Settings {
 }
 func (a *remoteAPI) UpdateSettings(ctx context.Context, settings storage.Settings) error {
 	return a.r.invoke(ctx, "UpdateSettings", []any{settings}, nil)
+}
+func (a *remoteAPI) PatchSettings(ctx context.Context, patch map[string]json.RawMessage) error {
+	return a.r.invoke(ctx, "PatchSettings", []any{patch}, nil)
 }
 func (a *remoteAPI) CoreBinaryPath(kind model.CoreKind) string {
 	var out string

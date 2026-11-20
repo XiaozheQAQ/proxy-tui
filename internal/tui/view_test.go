@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -233,5 +234,56 @@ func TestProxyPickerSelection(t *testing.T) {
 	}
 	if result.Group != "PROXY" || result.Name != "NodeB" {
 		t.Errorf("selection = %+v", result)
+	}
+}
+
+type countingSubs struct {
+	app.ProfileService
+	activeCalls int32
+}
+
+func (c *countingSubs) ActiveFor(kind model.CoreKind) (model.Profile, bool) {
+	atomic.AddInt32(&c.activeCalls, 1)
+	return c.ProfileService.ActiveFor(kind)
+}
+
+type countingCores struct {
+	app.CoreService
+	kindCalls int32
+}
+
+func (c *countingCores) Kinds() []model.CoreKind {
+	atomic.AddInt32(&c.kindCalls, 1)
+	return c.CoreService.Kinds()
+}
+
+func TestViewDoesNotCallRemoteFrontend(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PROXY_TUI_HOME", dir)
+	paths, err := storage.DefaultPaths()
+	if err != nil {
+		t.Fatalf("DefaultPaths: %v", err)
+	}
+	application, err := app.New(paths)
+	if err != nil {
+		t.Fatalf("app.New: %v", err)
+	}
+	frontend := app.NewLocalFrontend(application)
+	subs := &countingSubs{ProfileService: frontend.Subs}
+	cores := &countingCores{CoreService: frontend.Cores}
+	frontend.Subs = subs
+	frontend.Cores = cores
+	ui := New(frontend)
+	ui.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	atomic.StoreInt32(&subs.activeCalls, 0)
+	atomic.StoreInt32(&cores.kindCalls, 0)
+	for i := 0; i < 5; i++ {
+		_ = ui.View()
+	}
+	if got := atomic.LoadInt32(&subs.activeCalls); got != 0 {
+		t.Fatalf("View called ActiveFor %d times", got)
+	}
+	if got := atomic.LoadInt32(&cores.kindCalls); got != 0 {
+		t.Fatalf("View called Kinds %d times", got)
 	}
 }

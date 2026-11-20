@@ -66,8 +66,10 @@ configs/templates             embedded base configs for node-only subscriptions
 4. The adapter injects runtime settings (`mixed-port`, a random controller secret, the
    Clash API for sing-box), writes the runtime config under `state/runtime`, launches the
    child process and waits for the control API to answer.
-5. The adapter persists `<core>-state.json` (pid, API address, secret) so a later process
-   can adopt the running core: status, proxies, traffic and stop all keep working.
+5. The adapter persists `<core>-state.json` (pid, process start time, executable, binary
+   SHA-256, config path/digest, API address, secret) so a later process can adopt the core
+   only after identity verification. A verified process with a transient API outage is
+   DEGRADED; a legacy/mismatched state is never killed.
 6. The TUI polls traffic and connections once per second through the Clash API.
 
 ## Supervisor and IPC (Phase 3D, partial)
@@ -78,7 +80,7 @@ configs/templates             embedded base configs for node-only subscriptions
                                    └── Mihomo / sing-box
 
 The supervisor is the same binary with the hidden `supervisor run` command. It is started
-detached and binds either a Windows Named Pipe (go-winio, Logon-SID DACL, remote clients
+detached and binds either a Windows Named Pipe (go-winio, user-SID DACL, remote clients
 rejected) or a Unix socket (0600, UID peer check), writes `supervisor-state.json` and serves
 versioned length-framed JSON. Mutations are serialized by a supervisor mutex; reads may
 run concurrently. CLI core lifecycle calls use IPC when the supervisor is running.
@@ -180,13 +182,13 @@ mutation calls (`app.call`).
 Two different things, deliberately named differently:
 
 * **Core Process Lifecycle Management** (implemented) — start, stop, restart, validate,
-  monitor and adopt core processes. Cores are children of the `proxy` process. A started core
-  survives the TUI exit and a later process can adopt it via `<core>-state.json`. This is
-  cross-session process adoption, **not IPC**: there is no socket, no daemon and no
-  autostart.
-* **Proxy Supervisor** (planned, Phase 3D) — a long-lived background service started by the
-  same binary, exposing a Unix socket / named pipe to the CLI and TUI, with autostart and
-  crash recovery.
+  monitor and adopt core processes. Cores are children of the supervisor process. A started
+  core survives TUI/supervisor exit and is adopted through `<core>-state.json` only after
+  PID start time, executable, binary hash, config hash and (when available) API identity are
+  verified. This is process adoption over the Clash API, not a data-plane IPC protocol.
+* **Proxy Supervisor** (implemented, 3D.1/3D.2) — a long-lived detached process started by
+  the same binary, exposing a Windows Named Pipe or Unix-domain socket to the CLI and TUI.
+  Autostart at login (3D.4) and a health monitor/restart loop (3D.3) are not implemented.
 
 ## Deliberate deviations from the original plan
 

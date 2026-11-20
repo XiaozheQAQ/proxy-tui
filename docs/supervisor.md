@@ -11,7 +11,9 @@ single writer for runtime state; the CLI already uses it for core lifecycle when
     proxy supervisor logs
     proxy supervisor run        # hidden, used by start
 
-State: `state/runtime/supervisor-state.json`. Endpoint: `state/runtime/supervisor.sock`.
+State: `state/runtime/supervisor-state.json`. Endpoint: `state/runtime/supervisor.sock`
+on Unix; a per-user Named Pipe on Windows (an explicit PROXY_TUI_HOME adds a
+runtime-directory suffix).
 Log: `state/logs/supervisor.log`.
 
 ## Lifecycle
@@ -32,10 +34,12 @@ local socket and constructs a remote `app.Frontend`; the local application is bu
 inside the supervisor. A test-only in-package flag exists for unit tests and is not reachable
 from the environment or CLI.
 
-Shared settings are written through `UpdateSettings`. The remote frontend reconnects on
-transport failures with bounded backoff and reuses OperationIDs; the supervisor deduplicates
-retried mutations. If the supervisor process is gone, it is not auto-restarted yet.
+Shared settings are written through field-level `PatchSettings` (or the full
+`UpdateSettings` for imports/tests). The remote frontend reconnects on transport failures
+with bounded backoff (1s/2s/5s/10s), reuses the same OperationID, and polls `operation.get`
+for long mutations whose response was lost. If the supervisor process is gone, the remote
+frontend calls the CLI-installed Ensure hook; an intentional stop is not resurrected.
 
 The TUI Overview shows `Supervisor CONNECTED/DISCONNECTED` and blocks mutations while
-disconnected. There is no automatic reconnect/backoff yet; a later refresh reports the
-disconnect. See `docs/phase3d.md` for the remaining security and validation gaps.
+disconnected. `View()` is render-only; refresh data is fetched by a Bubble Tea command.
+See `docs/phase3d.md` for the remaining external evidence gaps.

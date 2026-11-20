@@ -16,6 +16,7 @@ type journalPhase string
 
 const (
 	phasePrepared   journalPhase = "prepared"
+	phaseCommitting journalPhase = "committing"
 	phaseRestoring  journalPhase = "restoring"
 	phaseRolledBack journalPhase = "rolled-back"
 )

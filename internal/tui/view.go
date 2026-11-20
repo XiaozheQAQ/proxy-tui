@@ -78,7 +78,7 @@ func (m *Model) statusLine(theme layout.Theme, width int) string {
 		level = m.toast.level
 	}
 
-	active, hasActive := m.app.Subs.ActiveFor(m.core)
+	active, hasActive := m.active[m.core]
 	right := fmt.Sprintf("profiles %d", len(m.profiles))
 	if hasActive {
 		right = fmt.Sprintf("%s · %d nodes · profiles %d", active.Label(), active.NodeCount, len(m.profiles))

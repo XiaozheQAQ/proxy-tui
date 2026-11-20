@@ -2,6 +2,8 @@ package supervisor
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -61,6 +63,7 @@ type handler struct {
 
 	mutation    sync.Mutex
 	stopped     atomic.Bool
+	stopping    atomic.Bool
 	persistStop func() error
 
 	cacheMu sync.Mutex
@@ -68,10 +71,11 @@ type handler struct {
 }
 
 type cacheEntry struct {
-	operation string
-	response  ipc.Response
-	storedAt  time.Time
-	running   bool
+	operation   string
+	fingerprint string
+	response    ipc.Response
+	storedAt    time.Time
+	running     bool
 }
 
 // OperationStatusPayload reports the lifecycle of one mutation.
@@ -84,9 +88,15 @@ type OperationStatusPayload struct {
 }
 
 const (
-	operationCacheTTL = 5 * time.Minute
-	operationCacheMax = 256
+	readOperationTimeout = 30 * time.Second
+	mutationTimeout      = 15 * time.Minute
+	operationCacheMax    = 256
 )
+
+// operationCacheTTL is a variable so cache expiry can be tested without
+// waiting five minutes. It applies to terminal results only; RUNNING entries
+// are never expired and re-executed.
+var operationCacheTTL = 5 * time.Minute
 
 // NewHandler builds the RPC handler.
 func NewHandler(backend Backend, endpoint, version, logPath string, cancel context.CancelFunc, persistStop func() error) *handler {
@@ -103,19 +113,46 @@ func NewHandler(backend Backend, endpoint, version, logPath string, cancel conte
 	return h
 }
 
+// timeoutFor separates short read deadlines from long business mutations.
+func (h *handler) timeoutFor(request ipc.Request) time.Duration {
+	if h.isMutationRequest(request) {
+		return mutationTimeout
+	}
+	return readOperationTimeout
+}
+
 func (h *handler) handle(ctx context.Context, request ipc.Request) ipc.Response {
 	if request.Operation == ipc.OpOperationGet {
 		return h.operationStatus(request)
 	}
-	if cached, ok := h.lookupOperation(request); ok {
-		return cached
-	}
 	if request.OperationID != "" && h.isMutationRequest(request) {
-		h.markRunning(request)
+		fingerprint := requestFingerprint(request)
+		cached, claimed, err := h.claimOperation(request, fingerprint)
+		if err != nil {
+			return failResponse(request, ipc.CodeBadRequest, err.Error())
+		}
+		if !claimed {
+			return cached
+		}
+		response := h.safeDispatch(ctx, request)
+		if !response.Success && ctx.Err() == context.DeadlineExceeded {
+			response = failResponse(request, ipc.CodeOperationTimeout, "operation exceeded its business deadline")
+		}
+		h.finishOperation(request.OperationID, fingerprint, response)
+		return response
 	}
-	response := h.dispatch(ctx, request)
-	h.storeOperation(request, response)
-	return response
+	return h.safeDispatch(ctx, request)
+}
+
+// safeDispatch converts a backend panic into a normal failed response instead
+// of crashing the supervisor and leaving a RUNNING operation orphaned.
+func (h *handler) safeDispatch(ctx context.Context, request ipc.Request) (response ipc.Response) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			response = failResponse(request, ipc.CodeInternal, fmt.Sprintf("handler panic: %v", recovered))
+		}
+	}()
+	return h.dispatch(ctx, request)
 }
 
 func (h *handler) operationStatus(request ipc.Request) ipc.Response {
@@ -127,17 +164,19 @@ func (h *handler) operationStatus(request ipc.Request) ipc.Response {
 	}
 	h.cacheMu.Lock()
 	entry, ok := h.cache[payload.OperationID]
-	expired := ok && time.Since(entry.storedAt) > operationCacheTTL
+	expired := ok && !entry.running && time.Since(entry.storedAt) > operationCacheTTL
 	h.cacheMu.Unlock()
 	status := "UNKNOWN"
 	result := OperationStatusPayload{OperationID: payload.OperationID}
 	switch {
 	case !ok:
 		status = "UNKNOWN"
+	case entry.running:
+		// A running operation is never reported as expired: that would let a
+		// retry execute it a second time while the first is still in flight.
+		status = "RUNNING"
 	case expired:
 		status = "EXPIRED"
-	case entry.running:
-		status = "RUNNING"
 	case entry.response.Success:
 		status = "SUCCEEDED"
 		result.Payload = entry.response.Payload
@@ -153,6 +192,9 @@ func (h *handler) operationStatus(request ipc.Request) ipc.Response {
 }
 
 func (h *handler) dispatch(ctx context.Context, request ipc.Request) ipc.Response {
+	if h.stopping.Load() && h.isMutationRequest(request) {
+		return failResponse(request, ipc.CodeNetworkBlocked, "supervisor is stopping; mutations are disabled")
+	}
 	switch request.Operation {
 	case ipc.OpPing:
 		return okResponse(request, map[string]string{"status": "ok"})
@@ -200,6 +242,9 @@ func (h *handler) stop(ctx context.Context, request ipc.Request) ipc.Response {
 	h.mutation.Lock()
 	defer h.mutation.Unlock()
 
+	if h.stopping.Load() {
+		return okResponse(request, map[string]bool{"stopping": true})
+	}
 	for kind, status := range h.backend.Statuses(ctx) {
 		if status.Running {
 			return failResponse(request, ipc.CodeNetworkBlocked,
@@ -225,6 +270,9 @@ func (h *handler) stop(ctx context.Context, request ipc.Request) ipc.Response {
 			return failResponse(request, ipc.CodeInternal, "persist stop intent: "+err.Error())
 		}
 	}
+	// Reject new mutations before the final shutdown window. A mutation
+	// that already holds the mutex above completes before we get here.
+	h.stopping.Store(true)
 	h.stopped.Store(true)
 	go func() {
 		time.Sleep(80 * time.Millisecond)
@@ -246,6 +294,9 @@ func (h *handler) coreAction(ctx context.Context, request ipc.Request) ipc.Respo
 	}
 	h.mutation.Lock()
 	defer h.mutation.Unlock()
+	if h.stopping.Load() {
+		return failResponse(request, ipc.CodeNetworkBlocked, "supervisor is stopping; mutations are disabled")
+	}
 
 	status := h.backend.Statuses(ctx)[kind]
 	switch request.Operation {
@@ -313,6 +364,9 @@ func (h *handler) selectProxy(ctx context.Context, request ipc.Request) ipc.Resp
 	}
 	h.mutation.Lock()
 	defer h.mutation.Unlock()
+	if h.stopping.Load() {
+		return failResponse(request, ipc.CodeNetworkBlocked, "supervisor is stopping; mutations are disabled")
+	}
 	if !h.backend.Statuses(ctx)[kind].Running {
 		return failResponse(request, ipc.CodeCoreNotRunning, kind.DisplayName()+" is not running")
 	}
@@ -334,6 +388,9 @@ func (h *handler) appCall(ctx context.Context, request ipc.Request) ipc.Response
 	if isFacadeMutation(payload.Method) {
 		h.mutation.Lock()
 		defer h.mutation.Unlock()
+		if h.stopping.Load() {
+			return failResponse(request, ipc.CodeNetworkBlocked, "supervisor is stopping; mutations are disabled")
+		}
 	}
 	result, err := invokeFacade(ctx, target, payload.Method, payload.Args)
 	if err != nil {
@@ -346,7 +403,7 @@ func isFacadeMutation(method string) bool {
 	switch method {
 	case "CoreInstall", "CoreStart", "CoreStop", "CoreRestart", "CoreSelect",
 		"SubsSetActive", "SubsDelete", "SubsUpdate", "SubsUpdateAll", "SubsSetDefaultInterval",
-		"UpdateSettings", "LogsClear", "Import", "ApplyTrafficMode", "RecoverTUN",
+		"UpdateSettings", "PatchSettings", "LogsClear", "Import", "ApplyTrafficMode", "RecoverTUN",
 		"RecoverNetwork", "TUNDisable":
 		return true
 	}
@@ -371,54 +428,89 @@ func (h *handler) logs(ctx context.Context, request ipc.Request) ipc.Response {
 	return okResponse(request, LogsPayload{Entries: h.backend.LogsTail(limit), Path: h.logPath})
 }
 
-func (h *handler) lookupOperation(request ipc.Request) (ipc.Response, bool) {
-	if request.OperationID == "" {
-		return ipc.Response{}, false
-	}
+// claimOperation atomically either returns an existing result/progress
+// response or creates the RUNNING entry for a new operation. Check-and-set in
+// one cacheMu critical section is what makes duplicate IDs safe under
+// concurrency.
+func (h *handler) claimOperation(request ipc.Request, fingerprint string) (ipc.Response, bool, error) {
 	h.cacheMu.Lock()
 	defer h.cacheMu.Unlock()
-	entry, ok := h.cache[request.OperationID]
-	if !ok || time.Since(entry.storedAt) > operationCacheTTL || entry.operation != request.Operation {
-		return ipc.Response{}, false
-	}
-	if entry.running {
-		return failResponse(request, ipc.CodeOperationInProgress, "operation is still running; query operation.get"), true
-	}
-	cached := entry.response
-	cached.RequestID = request.RequestID
-	return cached, true
-}
 
-func (h *handler) markRunning(request ipc.Request) {
-	h.cacheMu.Lock()
-	defer h.cacheMu.Unlock()
+	if entry, ok := h.cache[request.OperationID]; ok {
+		if entry.fingerprint != fingerprint {
+			return ipc.Response{}, false, fmt.Errorf("operation_id %q was already used for a different request", request.OperationID)
+		}
+		if entry.running {
+			return failResponse(request, ipc.CodeOperationInProgress, "operation is still running; query operation.get"), false, nil
+		}
+		if time.Since(entry.storedAt) <= operationCacheTTL {
+			cached := entry.response
+			cached.RequestID = request.RequestID
+			return cached, false, nil
+		}
+		delete(h.cache, request.OperationID)
+	}
+
+	h.evictTerminalLocked()
 	h.cache[request.OperationID] = cacheEntry{
-		operation: request.Operation,
-		storedAt:  time.Now(),
-		running:   true,
+		operation:   request.Operation,
+		fingerprint: fingerprint,
+		storedAt:    time.Now(),
+		running:     true,
 	}
+	return ipc.Response{}, true, nil
 }
 
-func (h *handler) storeOperation(request ipc.Request, response ipc.Response) {
-	if request.OperationID == "" || !h.isMutationRequest(request) {
+func (h *handler) finishOperation(operationID, fingerprint string, response ipc.Response) {
+	if operationID == "" {
 		return
 	}
 	h.cacheMu.Lock()
 	defer h.cacheMu.Unlock()
-	if len(h.cache) >= operationCacheMax {
-		for id, entry := range h.cache {
-			if time.Since(entry.storedAt) > operationCacheTTL {
-				delete(h.cache, id)
-			}
-		}
-		for id := range h.cache {
-			if len(h.cache) < operationCacheMax {
-				break
-			}
+	entry, ok := h.cache[operationID]
+	if !ok || entry.fingerprint != fingerprint {
+		return
+	}
+	entry.response = response
+	entry.running = false
+	// The terminal TTL starts when the operation completed, not when it
+	// started; long mutations must not look expired immediately.
+	entry.storedAt = time.Now()
+	h.cache[operationID] = entry
+}
+
+// evictTerminalLocked removes expired terminal entries, then the oldest
+// terminal entries. RUNNING operations are never evicted.
+func (h *handler) evictTerminalLocked() {
+	if len(h.cache) < operationCacheMax {
+		return
+	}
+	for id, entry := range h.cache {
+		if !entry.running && time.Since(entry.storedAt) > operationCacheTTL {
 			delete(h.cache, id)
 		}
 	}
-	h.cache[request.OperationID] = cacheEntry{operation: request.Operation, response: response, storedAt: time.Now(), running: false}
+	for len(h.cache) >= operationCacheMax {
+		oldestID := ""
+		var oldest time.Time
+		for id, entry := range h.cache {
+			if entry.running {
+				continue
+			}
+			if oldestID == "" || entry.storedAt.Before(oldest) {
+				oldestID, oldest = id, entry.storedAt
+			}
+		}
+		if oldestID == "" {
+			return
+		}
+		delete(h.cache, oldestID)
+	}
+}
+
+func requestFingerprint(request ipc.Request) string {
+	sum := sha256.Sum256(request.Payload)
+	return request.Operation + ":" + hex.EncodeToString(sum[:])
 }
 
 func (h *handler) isMutationRequest(request ipc.Request) bool {

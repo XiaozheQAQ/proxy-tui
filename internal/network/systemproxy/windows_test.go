@@ -24,9 +24,12 @@ func TestWindowsDefaultKey(t *testing.T) {
 }
 
 func TestWindowsAdapterRoundTrip(t *testing.T) {
-	key := `Softwareproxy-tui-testRoundTrip`
+	key := `Software\proxy-tui-test\RoundTrip`
 	_ = registry.DeleteKey(registry.CURRENT_USER, key)
-	t.Cleanup(func() { _ = registry.DeleteKey(registry.CURRENT_USER, key) })
+	t.Cleanup(func() {
+		_ = registry.DeleteKey(registry.CURRENT_USER, key)
+		_ = registry.DeleteKey(registry.CURRENT_USER, `Software\proxy-tui-test`)
+	})
 
 	adapter := NewWindowsWithKey(key)
 	ctx := context.Background()
@@ -97,9 +100,12 @@ func TestWindowsAdapterRoundTrip(t *testing.T) {
 }
 
 func TestWindowsAdapterRestoresMissingValues(t *testing.T) {
-	key := `Softwareproxy-tui-testEmpty`
+	key := `Software\proxy-tui-test\Empty`
 	_ = registry.DeleteKey(registry.CURRENT_USER, key)
-	t.Cleanup(func() { _ = registry.DeleteKey(registry.CURRENT_USER, key) })
+	t.Cleanup(func() {
+		_ = registry.DeleteKey(registry.CURRENT_USER, key)
+		_ = registry.DeleteKey(registry.CURRENT_USER, `Software\proxy-tui-test`)
+	})
 
 	adapter := NewWindowsWithKey(key)
 	ctx := context.Background()

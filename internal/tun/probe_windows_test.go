@@ -33,6 +33,9 @@ func TestWindowsProxyRegistryKey(t *testing.T) {
 	if !strings.Contains(windowsInternetSettingsKey, "\\") {
 		t.Fatalf("proxy registry key lost its separators: %q", windowsInternetSettingsKey)
 	}
+	if os.Getenv("PROXY_TUI_LIVE") != "1" {
+		t.Skip("set PROXY_TUI_LIVE=1 to inspect this host")
+	}
 	known, enabled, address := windowsDesktopProxy()
 	if !known {
 		t.Fatalf("expected to read the WinINet proxy state")
@@ -47,6 +50,9 @@ func TestWindowsDNSRegistryKey(t *testing.T) {
 	key := `SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces`
 	if !strings.Contains(key, "\\") {
 		t.Fatalf("registry key lost its separators: %q", key)
+	}
+	if os.Getenv("PROXY_TUI_LIVE") != "1" {
+		t.Skip("set PROXY_TUI_LIVE=1 to inspect this host")
 	}
 	probe := SystemProbe{}
 	facts, err := probe.Facts(nil)

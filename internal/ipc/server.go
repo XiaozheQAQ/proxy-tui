@@ -15,14 +15,21 @@ type Handler func(ctx context.Context, request Request) Response
 
 // Server accepts local supervisor connections.
 type Server struct {
-	listener net.Listener
-	handler  Handler
-	timeout  time.Duration
+	listener   net.Listener
+	handler    Handler
+	timeout    time.Duration
+	timeoutFor func(Request) time.Duration
 
-	mu    sync.Mutex
-	conns map[net.Conn]struct{}
-	wg    sync.WaitGroup
+	mu      sync.Mutex
+	conns   map[net.Conn]struct{}
+	closing bool
+	wg      sync.WaitGroup
 }
+
+// SetTimeoutFor overrides the per-request operation deadline. Read-only
+// operations should stay short while mutations may legitimately run for
+// minutes; the connection read deadline remains independent.
+func (s *Server) SetTimeoutFor(fn func(Request) time.Duration) { s.timeoutFor = fn }
 
 // NewServer builds a server around listener and handler.
 func NewServer(listener net.Listener, handler Handler) *Server {
@@ -53,9 +60,16 @@ func (s *Server) Serve(ctx context.Context) error {
 			continue
 		}
 		s.mu.Lock()
+		if s.closing {
+			s.mu.Unlock()
+			_ = conn.Close()
+			continue
+		}
+		// Add is serialized with Close's closing flag. This prevents an Add
+		// racing with Wait when Close wins the accept loop.
+		s.wg.Add(1)
 		s.conns[conn] = struct{}{}
 		s.mu.Unlock()
-		s.wg.Add(1)
 		go s.serveConn(ctx, conn)
 	}
 }
@@ -92,15 +106,22 @@ func (s *Server) handle(parent context.Context, request Request) Response {
 	if request.Version != Version {
 		return errorResponse(request, CodeVersionMismatch, "protocol version mismatch")
 	}
-	ctx, cancel := context.WithTimeout(parent, s.timeout)
+	timeout := s.timeout
+	if s.timeoutFor != nil {
+		if custom := s.timeoutFor(request); custom > 0 {
+			timeout = custom
+		}
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	return s.handler(ctx, request)
 }
 
 // Close stops accepting and closes active connections.
 func (s *Server) Close() {
-	_ = s.listener.Close()
 	s.mu.Lock()
+	s.closing = true
+	_ = s.listener.Close()
 	for conn := range s.conns {
 		_ = conn.Close()
 	}

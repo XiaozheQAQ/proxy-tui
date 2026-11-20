@@ -66,7 +66,7 @@ func (m Mode) Display() string {
 // Errors reported by the network manager.
 var (
 	ErrUnsupported    = errors.New("system proxy control is not supported on this platform")
-	ErrTUNUnsupported = errors.New("TUN is provided by the proxy core and is not implemented yet (Phase 3C)")
+	ErrTUNUnsupported = errors.New("TUN is managed by the core-native TUN lifecycle; use the TUN API")
 	ErrNoBackup       = errors.New("the desktop proxy is enabled but proxy-tui has no backup of the original settings")
 	ErrInvalidDesired = errors.New("invalid system proxy configuration")
 )
@@ -202,6 +202,7 @@ type Report struct {
 	Desktop        ProxyState       `json:"desktop"`
 	Environment    EnvironmentProxy `json:"environment"`
 	BackupActive   bool             `json:"backup_active"`
+	BackupStale    bool             `json:"backup_stale,omitempty"`
 	BackupAt       time.Time        `json:"backup_at,omitempty"`
 	BackupOriginal ProxyState       `json:"backup_original"`
 	Adapters       []Capabilities   `json:"adapters"`
@@ -212,9 +213,9 @@ type Report struct {
 	ForeignProxyDetail string `json:"foreign_proxy_detail,omitempty"`
 }
 
-// TUNAvailable reports whether a core can take over traffic with TUN. This is
-// false until Phase 3C wires the core TUN configuration.
-func TUNAvailable() bool { return false }
+// TUNAvailable reports whether core-native TUN is available. The concrete
+// lifecycle lives in internal/tun; network.Manager no longer owns TUN writes.
+func TUNAvailable() bool { return true }
 
 // SortedAdapters returns capabilities sorted by adapter name.
 func SortedAdapters(caps []Capabilities) []Capabilities {

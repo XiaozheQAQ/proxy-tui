@@ -1,9 +1,9 @@
 # Phase 3D — Supervisor & IPC
 
 Status: **3D.1 implemented; 3D.2 client migration implemented and Windows Named Pipe
-shipped. Not COMPLETE because cross-SID denial, native Linux/macOS authentication,
-supervisor auto-ensure and multi-TUI live validation remain outstanding. 3D.3/3D.4 not
-started.**
+shipped. Not COMPLETE because cross-user denial, native Linux/macOS authentication,
+full cross-process FakeCore adoption, real CI and interactive multi-TUI validation remain
+outstanding. 3D.3/3D.4 not started.**
 
 ## Architecture now
 
@@ -59,7 +59,7 @@ started.**
 |---|---|---|---|
 | Linux | Unix socket 0600, dir 0700 | `SO_PEERCRED` UID check | compiled and unit-tested; not run on a native Linux host this round |
 | macOS | Unix socket 0600, dir 0700 | `LOCAL_PEERCRED` UID check | cross-compiled; not run |
-| Windows | Named Pipe `\\.\pipe\proxy-tui-<LogonSID>` | Logon-SID DACL; go-winio rejects remote clients | native Windows lifecycle + live Supervisor/TUI/CLI PASS; cross-SID NOT TESTED |
+| Windows | Named Pipe per-user SID + runtime-dir hash | user-SID DACL; go-winio rejects remote clients | native Windows lifecycle + live Supervisor/TUI/CLI PASS; cross-user NOT TESTED |
 
 No TCP endpoint is exposed. There is no token; Unix relies on peer credentials, Windows on
 directory ownership. Cross-user adversarial tests have not been run. Windows Named Pipe with
@@ -71,12 +71,13 @@ an explicit SID ACL remains required before claiming Windows IPC security.
   concurrent node/Traffic Mode changes) are still not performed; only CLI concurrency and
   single-TUI startup/exit were exercised.
 - Bounded transport reconnect is implemented (1s/2s/5s/10s, same OperationID). If the
-  supervisor process itself has exited, the remote client does not auto-ensure a new
-  supervisor yet; the TUI reports DISCONNECTED and blocks writes until a supervisor is
-  started manually.
-- Cross-SID denial is not yet tested; the Logon-SID DACL is present and observed live, but
-  no second account was used.
-- Payload fuzzing, secret-in-log tests and route-replacement tests are not added.
+  supervisor process itself has exited, the remote client invokes the CLI Ensure hook; a
+  recorded INTENTIONALLY_STOPPED state is not resurrected.
+- Cross-user denial is not yet tested; the user-SID DACL is present, but no second account
+  was used.
+- Secret canary tests and path-token redaction are added. Payload fuzz currently covers
+  framing/JSON only; handler-dispatch fuzz and a deterministic path-replacement race test
+  remain external.
 - TUI-internal Disable (Phase 3C.6) still requires real manual acceptance.
 - 3D.3 health monitor/auto-restart and 3D.4 autostart are not started.
 

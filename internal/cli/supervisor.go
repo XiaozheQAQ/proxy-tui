@@ -7,12 +7,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/proxytui/proxy-tui/internal/app"
+	"github.com/proxytui/proxy-tui/internal/core"
 	"github.com/proxytui/proxy-tui/internal/ipc"
 	"github.com/proxytui/proxy-tui/internal/storage"
 	"github.com/proxytui/proxy-tui/internal/subscription/model"
@@ -136,14 +138,23 @@ func runSupervisorStop(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
 		conn, dialErr := ipc.Dial(cmd.Context(), endpoint, 500*time.Millisecond)
 		if dialErr != nil {
-			printLine(cmd.OutOrStdout(), "supervisor stopped")
-			return nil
+			// The listener can close before deferred lifecycle/state writes
+			// finish. Only report completion once both are settled.
+			state, stateErr := supervisor.LoadState(paths)
+			record, recordErr := supervisor.LoadLifecycle(paths)
+			stateGone := stateErr == nil && state == nil
+			stopped := recordErr == nil && record != nil && record.Status == supervisor.LifecycleStopped
+			if stateGone && stopped {
+				printLine(cmd.OutOrStdout(), "supervisor stopped")
+				return nil
+			}
+		} else {
+			_ = conn.Close()
 		}
-		_ = conn.Close()
 		time.Sleep(100 * time.Millisecond)
 	}
 	return fmt.Errorf("supervisor did not stop within 5s; see %s", filepath.Join(paths.LogsDir(), "supervisor.log"))
@@ -206,6 +217,24 @@ func supervisorCoreAction(ctx context.Context, operation string, kind model.Core
 	return action, true, err
 }
 
+func ensureLockHeldByLiveProcess(lockPath string, lockedAt time.Time) bool {
+	content, err := os.ReadFile(lockPath)
+	if err != nil {
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(content)))
+	if err != nil || pid <= 0 {
+		return false
+	}
+	identity, err := core.ReadProcessIdentity(pid)
+	if err != nil {
+		return false
+	}
+	// A recycled PID started after the lock was created; it cannot be the
+	// holder. A holder started before (or at) the lock timestamp is alive.
+	return !identity.StartedAt.After(lockedAt.Add(2 * time.Second))
+}
+
 // ensureSupervisor starts the detached supervisor when it is not running.
 // acquireEnsureLock serializes supervisor creation across processes. While
 // waiting it also watches for another client's supervisor becoming ready.
@@ -217,11 +246,18 @@ func acquireEnsureLock(ctx context.Context, paths storage.Paths, endpoint string
 		if err == nil {
 			_, _ = fmt.Fprintf(file, "%d\n", os.Getpid())
 			_ = file.Close()
-			return func() { _ = os.Remove(lockPath) }, false, nil
+			pid := os.Getpid()
+			return func() {
+				if content, readErr := os.ReadFile(lockPath); readErr == nil && strings.TrimSpace(string(content)) == fmt.Sprintf("%d", pid) {
+					_ = os.Remove(lockPath)
+				}
+			}, false, nil
 		}
 		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > 20*time.Second {
-			_ = os.Remove(lockPath)
-			continue
+			if !ensureLockHeldByLiveProcess(lockPath, info.ModTime()) {
+				_ = os.Remove(lockPath)
+				continue
+			}
 		}
 		if client, dialErr := ipc.Dial(ctx, endpoint, 300*time.Millisecond); dialErr == nil {
 			_ = client.Close()

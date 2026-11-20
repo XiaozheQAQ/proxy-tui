@@ -30,19 +30,20 @@ func Serve(ctx context.Context, paths storage.Paths, version string, backend Bac
 
 	state := State{InstanceID: NewInstanceID(), PID: os.Getpid(), StartedAt: time.Now(), Endpoint: endpoint, Version: version, Protocol: ipc.Version}
 	persistStop := func() error {
-		return SaveLifecycle(paths, LifecycleRecord{
+		return SaveLifecycleOwner(paths, LifecycleRecord{
 			Version: 1, InstanceID: state.InstanceID, Status: LifecycleStopped,
 			PID: state.PID, StartedAt: state.StartedAt, Source: "supervisor.stop",
 		})
 	}
 	h := NewHandler(backend, endpoint, version, filepath.Join(paths.LogsDir(), "supervisor.log"), cancel, persistStop)
 	server := ipc.NewServer(listener, h.handle)
+	server.SetTimeoutFor(h.timeoutFor)
 	defer server.Close()
 
 	if err := SaveState(paths, state); err != nil {
 		return fmt.Errorf("persist supervisor state: %w", err)
 	}
-	defer RemoveState(paths)
+	defer RemoveStateIfOwner(paths, state.InstanceID)
 	if err := SaveLifecycle(paths, LifecycleRecord{Version: 1, InstanceID: state.InstanceID, Status: LifecycleRunning, PID: state.PID, StartedAt: state.StartedAt, Source: "supervisor.start"}); err != nil {
 		return fmt.Errorf("persist supervisor lifecycle: %w", err)
 	}

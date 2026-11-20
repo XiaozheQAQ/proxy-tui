@@ -30,6 +30,8 @@ produced one supervisor process.
 
 ## Core adoption
 
-The existing core identity checks are retained. This round did **not** run a FakeCore
-adoption test, so "crash, adopt the still-running core" is NOT TESTED. Recovery never kills
-a core to make a supervisor start.
+Core adoption now verifies PID start time, executable path, binary SHA-256, config
+SHA-256 and (best effort) the Clash API secret. Adapter-level tests cover verified adopt,
+transient API degradation, legacy state refusal and safe Stop. A full Supervisor A/B crash
+run with a real OS FakeCore is still **NOT TESTED**; recovery never kills a core to make a
+supervisor start.

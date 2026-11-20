@@ -74,7 +74,8 @@ UI explains why it cannot be activated.
 * Empty responses, invalid YAML/JSON and payloads without usable nodes are rejected.
 * Unsupported entries are listed with protocol and reason; the import continues with the
   supported ones and reports the count.
-* Tokens in URLs are redacted in logs, errors and the UI.
+* Tokens in URLs are redacted in logs, errors and the UI (including path segments). The
+  original URL is persisted with owner-only permissions because updates must reuse it.
 
 ## Known limitations
 

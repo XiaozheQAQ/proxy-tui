@@ -196,9 +196,9 @@ func TestWindowsPipeDACL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("securityDescriptor: %v", err)
 	}
-	sid, err := LogonSID()
+	sid, err := UserSID()
 	if err != nil {
-		t.Fatalf("LogonSID: %v", err)
+		t.Fatalf("UserSID: %v", err)
 	}
 	if !strings.Contains(sddl, sid) {
 		t.Fatalf("DACL does not contain the logon SID: %s", sddl)
@@ -210,5 +210,28 @@ func TestWindowsPipeDACL(t *testing.T) {
 	}
 	if !strings.HasPrefix(sddl, "D:P") {
 		t.Fatalf("DACL is not protected: %s", sddl)
+	}
+}
+
+func TestWindowsEndpointIsolatesRuntimeDirectories(t *testing.T) {
+	t.Setenv("PROXY_TUI_HOME", `C:\one`)
+	a, err := EndpointPath(`C:\one\runtime`)
+	if err != nil {
+		t.Fatalf("endpoint A: %v", err)
+	}
+	t.Setenv("PROXY_TUI_HOME", `C:\two`)
+	b, err := EndpointPath(`C:\two\runtime`)
+	if err != nil {
+		t.Fatalf("endpoint B: %v", err)
+	}
+	if a == b {
+		t.Fatal("different runtime directories share one pipe")
+	}
+	sid, err := UserSID()
+	if err != nil {
+		t.Fatalf("sid: %v", err)
+	}
+	if !strings.Contains(a, strings.ReplaceAll(sid, "\\", "-")) {
+		t.Fatalf("endpoint %q does not contain the user SID", a)
 	}
 }

@@ -2,8 +2,11 @@
 
 Existing recovery is unchanged:
 
-- `tun-state.json` ownership uses PID, process start time, binary path, binary SHA-256 and
-  rendered-config SHA-256; an unverifiable process is never stopped.
+- Core state and `tun-state.json` ownership use PID, process start time, executable path,
+  binary SHA-256 and the actual rendered-config SHA-256 (path + digest). Legacy or
+  mismatched state is never killed; it is reported for manual inspection.
+- A verified process whose control API is temporarily unavailable is DEGRADED, not STOPPED;
+  its state is kept and a second core is not started.
 - Network transactions keep the Phase 3A journal/backup and restore only when the proxy is
   still owned by ProxyTUI.
 - After a core crash the TUN adapter normally disappears; the next ProxyTUI invocation
